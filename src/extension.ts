@@ -1,111 +1,70 @@
 import * as vscode from "vscode";
-import { exec, execSync } from "child_process";
+import { execFile, execFileSync } from "child_process";
 import { promisify } from "util";
+import {
+  formatCpu,
+  formatMemory,
+  NodeProcess,
+  parsePosixProcesses,
+  parseWindowsProcesses,
+} from "./processes";
 
-const execAsync = promisify(exec);
-
-// ─── Data Model ───────────────────────────────────────────────────────────────
-
-export interface NodeProcess {
-  pid: number;
-  command: string;
-  args: string;
-  cpu: string;
-  memory: string;
-  elapsed: string;
-}
+const execFileAsync = promisify(execFile);
 
 // ─── Process Fetching ─────────────────────────────────────────────────────────
 
 async function getNodeProcesses(): Promise<NodeProcess[]> {
   try {
-    let stdout = "";
-
     if (process.platform === "win32") {
-      // Windows: use WMIC
-      const result = await execAsync(
-        `wmic process where "name='node.exe'" get ProcessId,CommandLine,WorkingSetSize /format:csv`
-      );
-      stdout = result.stdout;
-      return parseWindowsProcesses(stdout);
-    } else {
-      // macOS / Linux: use ps
-      const result = await execAsync(
-        `ps aux | grep -E "^\\S+\\s+[0-9]+.*node" | grep -v grep`
-      );
-      stdout = result.stdout;
-      return parsePosixProcesses(stdout);
+      const result = await execFileAsync("powershell", [
+        "-NoProfile",
+        "-Command",
+        "Get-CimInstance Win32_Process -Filter \"name = 'node.exe'\" | Select-Object ProcessId, CommandLine, WorkingSetSize | ConvertTo-Json -Compress",
+      ]);
+      return parseWindowsProcesses(result.stdout);
     }
+
+    const result = await execFileAsync("ps", [
+      "-axo",
+      "pid=,pcpu=,pmem=,etime=,command=",
+    ]);
+    return parsePosixProcesses(result.stdout);
   } catch {
-    // grep returns exit code 1 when no matches — that's fine
     return [];
   }
 }
 
-function parsePosixProcesses(raw: string): NodeProcess[] {
-  const processes: NodeProcess[] = [];
-
-  for (const line of raw.trim().split("\n")) {
-    if (!line.trim()) continue;
-
-    // ps aux columns: USER PID %CPU %MEM VSZ RSS TTY STAT START TIME COMMAND
-    const parts = line.trim().split(/\s+/);
-    if (parts.length < 11) continue;
-
-    const pid = parseInt(parts[1], 10);
-    if (isNaN(pid)) continue;
-
-    const cpu = parts[2];
-    const memory = parts[3];
-    const elapsed = parts[9];
-    const fullCommand = parts.slice(10).join(" ");
-
-    // Only include actual node processes (not grep itself, not other tools)
-    if (!fullCommand.includes("node")) continue;
-
-    // Split command from args
-    const cmdParts = fullCommand.split(" ");
-    const command = cmdParts[0];
-    const args = cmdParts.slice(1).join(" ");
-
-    processes.push({ pid, command, args, cpu, memory, elapsed });
-  }
-
-  return processes;
+function shouldPromptBeforeKillOnExit(): boolean {
+  return process.platform === "darwin";
 }
 
-function parseWindowsProcesses(raw: string): NodeProcess[] {
-  const processes: NodeProcess[] = [];
-  const lines = raw.trim().split("\n").slice(1); // skip CSV header
-
-  for (const line of lines) {
-    const parts = line.split(",");
-    if (parts.length < 3) continue;
-
-    const pid = parseInt(parts[2]?.trim(), 10);
-    const cmdLine = parts[1]?.trim() ?? "";
-    const memBytes = parseInt(parts[3]?.trim(), 10);
-
-    if (isNaN(pid)) continue;
-
-    const cmdParts = cmdLine.split(" ");
-    const command = cmdParts[0];
-    const args = cmdParts.slice(1).join(" ");
-    const memory = isNaN(memBytes)
-      ? "?"
-      : `${Math.round(memBytes / 1024 / 1024)}MB`;
-
-    processes.push({ pid, command, args, cpu: "?", memory, elapsed: "?" });
+function confirmKillOnExit(processCount: number): boolean {
+  if (!shouldPromptBeforeKillOnExit()) {
+    return true;
   }
 
-  return processes;
+  const processLabel = `${processCount} Node.js process${
+    processCount !== 1 ? "es are" : " is"
+  } still running. Kill ${processCount !== 1 ? "them" : "it"} now?`;
+
+  try {
+    execFileSync("osascript", [
+      "-e",
+      `display dialog "${processLabel}" buttons {"Leave Running", "Kill All"} default button "Kill All" with icon caution`,
+      "-e",
+      "button returned of result",
+    ]);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function killProcess(pid: number): Promise<void> {
   if (process.platform === "win32") {
-    execSync(`taskkill /PID ${pid} /F`);
+    execFileSync("taskkill", ["/PID", String(pid), "/F"]);
   } else {
-    execSync(`kill -9 ${pid}`);
+    execFileSync("kill", ["-9", String(pid)]);
   }
 }
 
@@ -131,24 +90,25 @@ async function killAllNodeProcesses(
 
 class NodeProcessItem extends vscode.TreeItem {
   constructor(public readonly process: NodeProcess) {
-    // Shorten very long command strings for the label
     const label = shortenCommand(process.command);
     super(label, vscode.TreeItemCollapsibleState.None);
 
     this.contextValue = "nodeProcess";
-    this.description = `PID: ${process.pid}  CPU: ${process.cpu}%  MEM: ${process.memory}%`;
+    this.description = `PID: ${process.pid}  CPU: ${formatCpu(
+      process.cpu
+    )}  MEM: ${formatMemory(process.memory)}`;
     this.tooltip = new vscode.MarkdownString(
       [
         `**PID:** ${process.pid}`,
         `**Command:** \`${process.command}\``,
         process.args ? `**Args:** \`${process.args}\`` : "",
-        `**CPU:** ${process.cpu}%`,
-        `**Memory:** ${process.memory}%`,
+        `**CPU:** ${formatCpu(process.cpu)}`,
+        `**Memory:** ${formatMemory(process.memory)}`,
         `**Elapsed:** ${process.elapsed}`,
       ]
         .filter(Boolean)
         .join("\n\n")
-    );
+      );
 
     this.iconPath = new vscode.ThemeIcon(
       "circuit-board",
@@ -174,14 +134,17 @@ class NodeProcessProvider
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
   private processes: NodeProcess[] = [];
+  private hasLoaded = false;
 
-  refresh(): void {
+  async refresh(): Promise<NodeProcess[]> {
+    this.processes = await getNodeProcesses();
+    this.hasLoaded = true;
     this._onDidChangeTreeData.fire();
+    return this.processes;
   }
 
   async getProcesses(): Promise<NodeProcess[]> {
-    this.processes = await getNodeProcesses();
-    return this.processes;
+    return this.refresh();
   }
 
   getCachedProcesses(): NodeProcess[] {
@@ -193,7 +156,10 @@ class NodeProcessProvider
   }
 
   async getChildren(): Promise<vscode.TreeItem[]> {
-    this.processes = await getNodeProcesses();
+    if (!this.hasLoaded) {
+      this.processes = await getNodeProcesses();
+      this.hasLoaded = true;
+    }
 
     if (this.processes.length === 0) {
       return [new EmptyItem("No Node.js processes running")];
@@ -230,9 +196,8 @@ function createStatusBarButton(
 
 async function updateStatusBar(
   item: vscode.StatusBarItem,
-  provider: NodeProcessProvider
+  processes: NodeProcess[]
 ): Promise<void> {
-  const processes = provider.getCachedProcesses();
   const count = processes.length;
 
   if (count === 0) {
@@ -271,9 +236,9 @@ export async function activate(
     vscode.commands.registerCommand(
       "nodeProcessManager.showProcesses",
       async () => {
-        // Focus the tree view in the sidebar
+        const processes = await provider.refresh();
         await vscode.commands.executeCommand("nodeProcesses.focus");
-        provider.refresh();
+        await updateStatusBar(statusBarItem, processes);
       }
     )
   );
@@ -282,9 +247,12 @@ export async function activate(
     vscode.commands.registerCommand(
       "nodeProcessManager.refresh",
       async () => {
-        provider.refresh();
-        await updateStatusBar(statusBarItem, provider);
-        vscode.window.setStatusBarMessage("$(sync~spin) Refreshed Node processes", 2000);
+        const processes = await provider.refresh();
+        await updateStatusBar(statusBarItem, processes);
+        vscode.window.setStatusBarMessage(
+          "$(sync~spin) Refreshed Node processes",
+          2000
+        );
       }
     )
   );
@@ -311,8 +279,8 @@ export async function activate(
           } catch (err) {
             vscode.window.showErrorMessage(`Failed to kill PID ${pid}: ${err}`);
           }
-          provider.refresh();
-          await updateStatusBar(statusBarItem, provider);
+          const processes = await provider.refresh();
+          await updateStatusBar(statusBarItem, processes);
         }
       }
     )
@@ -322,7 +290,8 @@ export async function activate(
     vscode.commands.registerCommand(
       "nodeProcessManager.killAll",
       async () => {
-        const processes = provider.getCachedProcesses();
+        const processes = await provider.refresh();
+        await updateStatusBar(statusBarItem, processes);
 
         if (processes.length === 0) {
           vscode.window.showInformationMessage("No Node.js processes to kill.");
@@ -344,8 +313,8 @@ export async function activate(
               errors > 0 ? ` (${errors} failed)` : ""
             }.`
           );
-          provider.refresh();
-          await updateStatusBar(statusBarItem, provider);
+          const refreshedProcesses = await provider.refresh();
+          await updateStatusBar(statusBarItem, refreshedProcesses);
         }
       }
     )
@@ -362,8 +331,8 @@ export async function activate(
     if (refreshTimer) clearInterval(refreshTimer);
     if (seconds > 0) {
       refreshTimer = setInterval(async () => {
-        provider.refresh();
-        await updateStatusBar(statusBarItem, provider);
+        const processes = await provider.refresh();
+        await updateStatusBar(statusBarItem, processes);
       }, seconds * 1000);
     }
   };
@@ -383,8 +352,8 @@ export async function activate(
   );
 
   // Initial status bar update
-  await provider.getProcesses();
-  await updateStatusBar(statusBarItem, provider);
+  const initialProcesses = await provider.getProcesses();
+  await updateStatusBar(statusBarItem, initialProcesses);
 
   // ── Kill-on-exit ──────────────────────────────────────────────────────────
 
@@ -403,25 +372,7 @@ export async function activate(
       const running = await getNodeProcesses();
       if (running.length === 0) return;
 
-      // VS Code is closing — we can't show async modals reliably at this point,
-      // so we use a synchronous native dialog via a child process on macOS/Linux.
-      // On Windows we skip the prompt and kill immediately if configured.
-      if (process.platform !== "win32") {
-        try {
-          execSync(
-            `osascript -e 'display dialog "${running.length} Node.js process${
-              running.length !== 1 ? "es are" : " is"
-            } still running. Kill ${
-              running.length !== 1 ? "them" : "it"
-            } now?" buttons {"Leave Running", "Kill All"} default button "Kill All" with icon caution' -e 'button returned of result'`
-          );
-          // If osascript returns without error, the user clicked "Kill All"
-          await killAllNodeProcesses(running);
-        } catch {
-          // User clicked "Leave Running" or dialog failed — do nothing
-        }
-      } else {
-        // Windows: kill silently on exit (no blocking dialog available)
+      if (confirmKillOnExit(running.length)) {
         await killAllNodeProcesses(running);
       }
     },

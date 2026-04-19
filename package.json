@@ -3,10 +3,21 @@
   "displayName": "Node Process Manager",
   "description": "View and manage running Node.js processes from VS Code",
   "version": "1.0.0",
+  "publisher": "Protogenus",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Protogenus/hush-node.git"
+  },
+  "homepage": "https://github.com/Protogenus/hush-node",
+  "bugs": {
+    "url": "https://github.com/Protogenus/hush-node/issues"
+  },
+  "icon": "images/icon.png",
   "engines": {
     "vscode": "^1.74.0"
   },
   "categories": ["Other"],
+  "keywords": ["node", "process", "manager", "vscode", "extension"],
   "activationEvents": ["onStartupFinished"],
   "main": "./out/extension.js",
   "contributes": {
@@ -65,7 +76,7 @@
         "nodeProcessManager.killOnExit": {
           "type": "boolean",
           "default": true,
-          "description": "Prompt to kill all Node processes when VS Code exits"
+          "description": "Kill all Node processes when VS Code exits. On supported platforms, prompt first."
         },
         "nodeProcessManager.autoRefreshInterval": {
           "type": "number",
@@ -78,7 +89,8 @@
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
+    "watch": "tsc -watch -p ./",
+    "test": "npm run compile && node --test"
   },
   "devDependencies": {
     "@types/node": "^18.0.0",
