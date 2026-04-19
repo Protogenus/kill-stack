@@ -1,0 +1,88 @@
+{
+  "name": "node-process-manager",
+  "displayName": "Node Process Manager",
+  "description": "View and manage running Node.js processes from VS Code",
+  "version": "1.0.0",
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "nodeProcessManager.showProcesses",
+        "title": "Node Process Manager: Show Running Node Processes"
+      },
+      {
+        "command": "nodeProcessManager.killAll",
+        "title": "Node Process Manager: Kill All Node Processes"
+      },
+      {
+        "command": "nodeProcessManager.refresh",
+        "title": "Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "nodeProcessManager.killProcess",
+        "title": "Kill Process",
+        "icon": "$(trash)"
+      }
+    ],
+    "views": {
+      "explorer": [
+        {
+          "id": "nodeProcesses",
+          "name": "Node Processes"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "nodeProcessManager.refresh",
+          "when": "view == nodeProcesses",
+          "group": "navigation"
+        },
+        {
+          "command": "nodeProcessManager.killAll",
+          "when": "view == nodeProcesses",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "nodeProcessManager.killProcess",
+          "when": "view == nodeProcesses && viewItem == nodeProcess",
+          "group": "inline"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Node Process Manager",
+      "properties": {
+        "nodeProcessManager.killOnExit": {
+          "type": "boolean",
+          "default": true,
+          "description": "Prompt to kill all Node processes when VS Code exits"
+        },
+        "nodeProcessManager.autoRefreshInterval": {
+          "type": "number",
+          "default": 5,
+          "description": "Auto-refresh interval in seconds (0 to disable)"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^18.0.0",
+    "@types/vscode": "^1.74.0",
+    "typescript": "^5.0.0"
+  }
+}
