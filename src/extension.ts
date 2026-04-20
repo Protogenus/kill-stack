@@ -9,7 +9,7 @@ import {
 } from "./processes";
 
 const execFileAsync = promisify(execFile);
-const STOP_STACK_GREEN = "#6CC24A";
+const KILL_STACK_GREEN = "#6CC24A";
 
 type PanelMessage =
   | { type: "ready" }
@@ -74,7 +74,7 @@ async function killProcess(pid: number): Promise<void> {
 }
 
 async function killAllNodeProcesses(
-  processes: NodeProcess[]
+  processes: NodeProcess[],
 ): Promise<{ killed: number; errors: number }> {
   let killed = 0;
   let errors = 0;
@@ -106,58 +106,58 @@ function escapeHtml(value: string): string {
 }
 
 function createStatusBarButton(
-  context: vscode.ExtensionContext
+  context: vscode.ExtensionContext,
 ): vscode.StatusBarItem {
   const item = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Left,
-    100
+    100,
   );
-  item.command = "stopStack.showProcesses";
-  item.text = "$(circuit-board) Stop Stack";
-  item.tooltip = "Open Stop Stack local server dashboard";
-  item.color = STOP_STACK_GREEN;
+  item.command = "killStack.showProcesses";
+  item.text = "$(circuit-board) Kill Stack";
+  item.tooltip = "Open Kill Stack local server dashboard";
+  item.color = KILL_STACK_GREEN;
   item.show();
   context.subscriptions.push(item);
   return item;
 }
 
-function getStopStackConfig(): vscode.WorkspaceConfiguration {
-  return vscode.workspace.getConfiguration("stopStack");
+function getKillStackConfig(): vscode.WorkspaceConfiguration {
+  return vscode.workspace.getConfiguration("killStack");
 }
 
 function getKillOnExitSetting(): boolean {
-  return getStopStackConfig().get<boolean>("killOnExit") ?? true;
+  return getKillStackConfig().get<boolean>("killOnExit") ?? true;
 }
 
 async function setKillOnExitSetting(enabled: boolean): Promise<void> {
-  await getStopStackConfig().update(
+  await getKillStackConfig().update(
     "killOnExit",
     enabled,
-    vscode.ConfigurationTarget.Global
+    vscode.ConfigurationTarget.Global,
   );
 }
 
 async function updateStatusBar(
   item: vscode.StatusBarItem,
-  processes: NodeProcess[]
+  processes: NodeProcess[],
 ): Promise<void> {
   const count = processes.length;
 
   if (count === 0) {
-    item.text = "$(circuit-board) Stop Stack";
+    item.text = "$(circuit-board) Kill Stack";
     item.tooltip = "No local dev servers running";
     item.backgroundColor = undefined;
   } else {
-    item.text = `$(circuit-board) Stop Stack (${count})`;
+    item.text = `$(circuit-board) Kill Stack (${count})`;
     item.tooltip = `${count} local server process${
       count !== 1 ? "es" : ""
     } running`;
     item.backgroundColor = undefined;
   }
-  item.color = STOP_STACK_GREEN;
+  item.color = KILL_STACK_GREEN;
 }
 
-class StopStackPanel implements vscode.Disposable {
+class KillStackPanel implements vscode.Disposable {
   private panel: vscode.WebviewPanel;
   private processes: NodeProcess[] = [];
   private readonly disposables: vscode.Disposable[] = [];
@@ -170,16 +170,18 @@ class StopStackPanel implements vscode.Disposable {
     private readonly onRefreshRequest: () => Promise<void>,
     private readonly onKillRequest: (pid: number) => Promise<void>,
     private readonly onKillAllRequest: () => Promise<void>,
-    private readonly onSetKillOnExitRequest: (enabled: boolean) => Promise<void>
+    private readonly onSetKillOnExitRequest: (
+      enabled: boolean,
+    ) => Promise<void>,
   ) {
     this.panel = vscode.window.createWebviewPanel(
-      "stopStackDashboard",
-      "Stop Stack",
+      "killStackDashboard",
+      "Kill Stack",
       vscode.ViewColumn.One,
       {
         enableScripts: true,
         retainContextWhenHidden: true,
-      }
+      },
     );
 
     this.processes = initialProcesses;
@@ -193,12 +195,12 @@ class StopStackPanel implements vscode.Disposable {
         }
       },
       null,
-      this.disposables
+      this.disposables,
     );
     this.panel.webview.onDidReceiveMessage(
       (message: PanelMessage) => this.handleMessage(message),
       null,
-      this.disposables
+      this.disposables,
     );
   }
 
@@ -255,7 +257,7 @@ class StopStackPanel implements vscode.Disposable {
   private getHtml(extensionUri: vscode.Uri): string {
     const nonce = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const iconUri = this.panel.webview.asWebviewUri(
-      vscode.Uri.joinPath(extensionUri, "images", "icon.png")
+      vscode.Uri.joinPath(extensionUri, "images", "icon.png"),
     );
 
     return `<!DOCTYPE html>
@@ -269,7 +271,7 @@ class StopStackPanel implements vscode.Disposable {
       } https: data:; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Stop Stack</title>
+    <title>Kill Stack</title>
     <style>
       :root {
         color-scheme: light dark;
@@ -353,7 +355,7 @@ class StopStackPanel implements vscode.Disposable {
         letter-spacing: -0.02em;
       }
 
-      .hero h1 .stop-word {
+      .hero h1 .kill-word {
         color: var(--ss-red-500);
         font-weight: 900;
         letter-spacing: -0.04em;
@@ -686,10 +688,10 @@ class StopStackPanel implements vscode.Disposable {
     <div class="shell">
       <section class="hero">
         <div class="hero-mark">
-          <img src="${iconUri}" alt="Stop Stack icon" />
+          <img src="${iconUri}" alt="Kill Stack icon" />
         </div>
         <div>
-          <h1><span class="stop-word">Stop</span> Stack</h1>
+          <h1><span class="kill-word">Kill</span> Stack</h1>
           <p>Inspect local dev servers before you stop anything. Built to make cleanup safer across runtimes and frameworks.</p>
         </div>
         <div class="actions">
@@ -865,10 +867,10 @@ class StopStackPanel implements vscode.Disposable {
 }
 
 export async function activate(
-  context: vscode.ExtensionContext
+  context: vscode.ExtensionContext,
 ): Promise<void> {
   let processes: NodeProcess[] = [];
-  let panel: StopStackPanel | undefined;
+  let panel: KillStackPanel | undefined;
   const statusBarItem = createStatusBarButton(context);
 
   const syncUi = async (): Promise<NodeProcess[]> => {
@@ -887,7 +889,7 @@ export async function activate(
       return;
     }
 
-    panel = new StopStackPanel(
+    panel = new KillStackPanel(
       context.extensionUri,
       processes,
       () => {
@@ -900,7 +902,7 @@ export async function activate(
         const target = processes.find((process) => process.pid === pid);
         if (!target) {
           vscode.window.showWarningMessage(
-            `Process PID ${pid} is no longer running.`
+            `Process PID ${pid} is no longer running.`,
           );
           await syncUi();
           return;
@@ -914,14 +916,14 @@ export async function activate(
               ? `${target.command} ${target.args}`
               : target.command,
           },
-          "Kill"
+          "Kill",
         );
 
         if (confirmed === "Kill") {
           try {
             await killProcess(pid);
             vscode.window.showInformationMessage(
-            `Killed local server process PID ${pid}`
+              `Killed local server process PID ${pid}`,
             );
           } catch (err) {
             vscode.window.showErrorMessage(`Failed to kill PID ${pid}: ${err}`);
@@ -932,7 +934,9 @@ export async function activate(
       async () => {
         const current = await syncUi();
         if (current.length === 0) {
-          vscode.window.showInformationMessage("No local server processes to kill.");
+          vscode.window.showInformationMessage(
+            "No local server processes to kill.",
+          );
           return;
         }
 
@@ -952,7 +956,7 @@ export async function activate(
                 ? `${detail}\n…and ${current.length - 5} more`
                 : detail,
           },
-          "Kill All"
+          "Kill All",
         );
 
         if (confirmed === "Kill All") {
@@ -960,7 +964,7 @@ export async function activate(
           vscode.window.showInformationMessage(
             `Killed ${killed} local server process${killed !== 1 ? "es" : ""}${
               errors > 0 ? ` (${errors} failed)` : ""
-            }.`
+            }.`,
           );
           await syncUi();
         }
@@ -968,7 +972,7 @@ export async function activate(
       async (enabled: boolean) => {
         await setKillOnExitSetting(enabled);
         await syncUi();
-      }
+      },
     );
 
     context.subscriptions.push(panel);
@@ -976,33 +980,33 @@ export async function activate(
   };
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("stopStack.showProcesses", async () => {
+    vscode.commands.registerCommand("killStack.showProcesses", async () => {
       await syncUi();
       await openPanel();
-    })
+    }),
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("stopStack.refresh", async () => {
+    vscode.commands.registerCommand("killStack.refresh", async () => {
       await syncUi();
       vscode.window.setStatusBarMessage(
-        "$(sync~spin) Refreshed Stop Stack dashboard",
-        2000
+        "$(sync~spin) Refreshed Kill Stack dashboard",
+        2000,
       );
       if (panel) {
         panel.reveal();
       }
-    })
+    }),
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("stopStack.killAll", async () => {
+    vscode.commands.registerCommand("killStack.killAll", async () => {
       await openPanel();
       await panel?.triggerKillAll();
-    })
+    }),
   );
 
-  const config = getStopStackConfig();
+  const config = getKillStackConfig();
   const intervalSec: number = config.get("autoRefreshInterval") ?? 5;
 
   let refreshTimer: ReturnType<typeof setInterval> | undefined;
@@ -1020,14 +1024,14 @@ export async function activate(
 
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((event) => {
-      if (event.affectsConfiguration("stopStack.autoRefreshInterval")) {
+      if (event.affectsConfiguration("killStack.autoRefreshInterval")) {
         const nextInterval =
           vscode.workspace
-            .getConfiguration("stopStack")
+            .getConfiguration("killStack")
             .get<number>("autoRefreshInterval") ?? 5;
         startAutoRefresh(nextInterval);
       }
-    })
+    }),
   );
 
   await syncUi();
@@ -1036,8 +1040,7 @@ export async function activate(
     dispose: async () => {
       if (refreshTimer) clearInterval(refreshTimer);
 
-      const killOnExit =
-        getKillOnExitSetting();
+      const killOnExit = getKillOnExitSetting();
 
       if (!killOnExit) {
         return;

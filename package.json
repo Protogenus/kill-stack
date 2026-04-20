@@ -1,16 +1,17 @@
 {
-  "name": "stop-stack",
-  "displayName": "Stop Stack",
-  "description": "Stop local server processes from VS Code. Includes a kill-on-exit option. Works on Windows, macOS, and Linux. Detects many common local server frameworks and tools.",
+  "name": "kill-stack",
+  "displayName": "Kill Stack",
+  "description": "Stop local server processes from VS Code. Includes a kill-on-exit option. Works on Windows, macOS, and Linux. Detects many common local server frameworks, runtimes, and tunnels.",
   "version": "1.0.0",
   "publisher": "RedRiverDesign",
+  "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Protogenus/stop-stack.git"
+    "url": "https://github.com/Protogenus/kill-stack.git"
   },
-  "homepage": "https://github.com/Protogenus/stop-stack",
+  "homepage": "https://github.com/Protogenus/kill-stack",
   "bugs": {
-    "url": "https://github.com/Protogenus/stop-stack/issues"
+    "url": "https://github.com/Protogenus/kill-stack/issues"
   },
   "icon": "images/icon.png",
   "engines": {
@@ -20,14 +21,16 @@
     "Other"
   ],
   "keywords": [
-    "node",
-    "process",
-    "manager",
     "vscode",
     "extension",
     "stop",
+    "kill",
     "stack",
-    "local-server"
+    "local-server",
+    "process-manager",
+    "dev-server",
+    "local-dev",
+    "tunnel"
   ],
   "activationEvents": [
     "onStartupFinished"
@@ -36,28 +39,28 @@
   "contributes": {
     "commands": [
       {
-        "command": "stopStack.showProcesses",
-        "title": "Stop Stack: Open Dashboard"
+        "command": "killStack.showProcesses",
+        "title": "Kill Stack: Open Dashboard"
       },
       {
-        "command": "stopStack.killAll",
-        "title": "Stop Stack: Kill All Local Servers"
+        "command": "killStack.killAll",
+        "title": "Kill Stack: Kill All Local Servers"
       },
       {
-        "command": "stopStack.refresh",
-        "title": "Stop Stack: Refresh Dashboard",
+        "command": "killStack.refresh",
+        "title": "Kill Stack: Refresh Dashboard",
         "icon": "$(refresh)"
       }
     ],
     "configuration": {
-      "title": "Stop Stack",
+      "title": "Kill Stack",
       "properties": {
-        "stopStack.killOnExit": {
+        "killStack.killOnExit": {
           "type": "boolean",
           "default": true,
           "description": "Kill all local server processes when VS Code exits. On macOS, prompt first."
         },
-        "stopStack.autoRefreshInterval": {
+        "killStack.autoRefreshInterval": {
           "type": "number",
           "default": 5,
           "description": "Auto-refresh interval in seconds (0 to disable)"
