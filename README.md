@@ -1,19 +1,19 @@
-# Node Process Manager
+# Stop Stack
 
-A VS Code extension that lets you view, inspect, and kill running Node.js processes — right from your editor.
+A VS Code extension that lets you view, inspect, and stop forgotten local server processes right from your editor.
 
 ---
 
 ## Features
 
 ### 🟢 Status Bar Button
-A live button in the status bar shows how many Node processes are running. Click it to jump straight to the process panel.
+A live button in the status bar shows how many local server processes are running. Click it to open the Stop Stack dashboard.
 
-- **Grey** → No Node processes running
-- **Orange** → One or more Node processes detected
+- **Grey** → No local server processes running
+- **Green** → One or more local server processes detected
 
-### 🌲 Node Processes Panel
-A tree view in the Explorer sidebar lists every running Node process with:
+### 🧭 Stop Stack Dashboard
+A dedicated webview dashboard gives you a fuller look at local dev servers, tunnels, and runtime processes before you kill anything:
 
 | Field | Description |
 |---|---|
@@ -21,20 +21,21 @@ A tree view in the Explorer sidebar lists every running Node process with:
 | **CPU %** | Current CPU usage |
 | **Memory %** | Current memory usage |
 | **Elapsed** | How long the process has been running |
+| **Executable** | Full binary path |
+| **Arguments** | Full server arguments |
 
-Hover over any entry for a full tooltip with the complete command and all arguments.
+Each process gets its own card with the full command line and a dedicated kill button, which makes it much easier to tell similar servers apart.
 
 ### ⚡ Commands
 
 | Command | Description |
 |---|---|
-| `Node Process Manager: Show Running Node Processes` | Focus the process panel |
-| `Node Process Manager: Kill All Node Processes` | Kill every Node process (with confirmation) |
-| **Refresh** (toolbar icon) | Manually refresh the list |
-| **Kill** (inline icon on each row) | Kill a single process |
+| `Stop Stack: Open Dashboard` | Open the Stop Stack webview |
+| `Stop Stack: Kill All Local Servers` | Kill every detected local server process |
+| `Stop Stack: Refresh Dashboard` | Manually refresh the dashboard |
 
 ### 🚪 Kill on Exit
-When you close VS Code, the extension can prompt you to kill any remaining Node processes. You'll see a native system dialog asking whether to kill them or leave them running.
+When you close VS Code, the extension can prompt you to kill any remaining local server processes. On macOS, you’ll see a native system dialog asking whether to kill them or leave them running.
 
 ---
 
@@ -42,8 +43,8 @@ When you close VS Code, the extension can prompt you to kill any remaining Node 
 
 | Setting | Default | Description |
 |---|---|---|
-| `nodeProcessManager.killOnExit` | `true` | Prompt to kill Node processes when VS Code closes |
-| `nodeProcessManager.autoRefreshInterval` | `5` | Auto-refresh interval in seconds (0 = disabled) |
+| `stopStack.killOnExit` | `true` | Kill local server processes when VS Code closes. On macOS, prompt first |
+| `stopStack.autoRefreshInterval` | `5` | Auto-refresh interval in seconds (0 = disabled) |
 
 ---
 
@@ -60,7 +61,7 @@ When you close VS Code, the extension can prompt you to kill any remaining Node 
 
 ```bash
 # 1. Clone / copy the extension folder
-cd node-process-manager
+cd node-ext
 
 # 2. Install dependencies
 npm install
@@ -79,7 +80,7 @@ code .
 ```bash
 npm install -g @vscode/vsce
 vsce package
-# Produces: node-process-manager-1.0.0.vsix
+# Produces: stop-stack-1.0.0.vsix
 ```
 
 ---
@@ -88,11 +89,11 @@ vsce package
 
 | Platform | Process Detection | Kill Method |
 |---|---|---|
-| macOS | `ps aux` | `kill -9 <pid>` |
-| Linux | `ps aux` | `kill -9 <pid>` |
-| Windows | `wmic` | `taskkill /PID /F` |
+| macOS | `ps -axo pid=,pcpu=,pmem=,etime=,command=` | `kill -9 <pid>` |
+| Linux | `ps -axo pid=,pcpu=,pmem=,etime=,command=` | `kill -9 <pid>` |
+| Windows | `Get-CimInstance Win32_Process` | `taskkill /PID /F` |
 
-On macOS/Linux, the kill-on-exit dialog is a native system alert via `osascript`. On Windows, processes are killed silently on exit (no blocking dialog is available at that point).
+On macOS, the kill-on-exit dialog is a native system alert via `osascript`. On Windows and Linux, processes are killed on exit without a blocking prompt at that point.
 
 ---
 

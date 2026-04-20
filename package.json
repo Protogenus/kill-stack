@@ -1,84 +1,63 @@
 {
-  "name": "node-process-manager",
-  "displayName": "Node Process Manager",
-  "description": "View and manage running Node.js processes from VS Code",
+  "name": "stop-stack",
+  "displayName": "Stop Stack",
+  "description": "Stop local server processes from VS Code. Includes a kill-on-exit option. Works on Windows, macOS, and Linux. Detects many common local server frameworks and tools.",
   "version": "1.0.0",
   "publisher": "Protogenus",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Protogenus/hush-node.git"
+    "url": "https://github.com/Protogenus/stop-stack.git"
   },
-  "homepage": "https://github.com/Protogenus/hush-node",
+  "homepage": "https://github.com/Protogenus/stop-stack",
   "bugs": {
-    "url": "https://github.com/Protogenus/hush-node/issues"
+    "url": "https://github.com/Protogenus/stop-stack/issues"
   },
   "icon": "images/icon.png",
   "engines": {
     "vscode": "^1.74.0"
   },
-  "categories": ["Other"],
-  "keywords": ["node", "process", "manager", "vscode", "extension"],
-  "activationEvents": ["onStartupFinished"],
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "node",
+    "process",
+    "manager",
+    "vscode",
+    "extension",
+    "stop",
+    "stack",
+    "local-server"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
       {
-        "command": "nodeProcessManager.showProcesses",
-        "title": "Node Process Manager: Show Running Node Processes"
+        "command": "stopStack.showProcesses",
+        "title": "Stop Stack: Open Dashboard"
       },
       {
-        "command": "nodeProcessManager.killAll",
-        "title": "Node Process Manager: Kill All Node Processes"
+        "command": "stopStack.killAll",
+        "title": "Stop Stack: Kill All Local Servers"
       },
       {
-        "command": "nodeProcessManager.refresh",
-        "title": "Refresh",
+        "command": "stopStack.refresh",
+        "title": "Stop Stack: Refresh Dashboard",
         "icon": "$(refresh)"
-      },
-      {
-        "command": "nodeProcessManager.killProcess",
-        "title": "Kill Process",
-        "icon": "$(trash)"
       }
     ],
-    "views": {
-      "explorer": [
-        {
-          "id": "nodeProcesses",
-          "name": "Node Processes"
-        }
-      ]
-    },
-    "menus": {
-      "view/title": [
-        {
-          "command": "nodeProcessManager.refresh",
-          "when": "view == nodeProcesses",
-          "group": "navigation"
-        },
-        {
-          "command": "nodeProcessManager.killAll",
-          "when": "view == nodeProcesses",
-          "group": "navigation"
-        }
-      ],
-      "view/item/context": [
-        {
-          "command": "nodeProcessManager.killProcess",
-          "when": "view == nodeProcesses && viewItem == nodeProcess",
-          "group": "inline"
-        }
-      ]
-    },
     "configuration": {
-      "title": "Node Process Manager",
+      "title": "Stop Stack",
       "properties": {
-        "nodeProcessManager.killOnExit": {
+        "stopStack.killOnExit": {
           "type": "boolean",
           "default": true,
-          "description": "Kill all Node processes when VS Code exits. On supported platforms, prompt first."
+          "description": "Kill all local server processes when VS Code exits. On macOS, prompt first."
         },
-        "nodeProcessManager.autoRefreshInterval": {
+        "stopStack.autoRefreshInterval": {
           "type": "number",
           "default": 5,
           "description": "Auto-refresh interval in seconds (0 to disable)"
