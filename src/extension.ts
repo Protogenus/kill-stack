@@ -126,7 +126,7 @@ function getKillStackConfig(): vscode.WorkspaceConfiguration {
 }
 
 function getKillOnExitSetting(): boolean {
-  return getKillStackConfig().get<boolean>("killOnExit") ?? true;
+  return getKillStackConfig().get<boolean>("killOnExit") ?? false;
 }
 
 async function setKillOnExitSetting(enabled: boolean): Promise<void> {

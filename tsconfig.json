@@ -10,7 +10,6 @@
     "sourceMap": true,
     "rootDir": "./src",
     "strict": true,
-    "moduleResolution": "node",
     "types": [
       "node",
       "vscode"

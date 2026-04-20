@@ -57,7 +57,7 @@
       "properties": {
         "killStack.killOnExit": {
           "type": "boolean",
-          "default": true,
+          "default": false,
           "description": "Kill all local server processes when VS Code exits. On macOS, prompt first."
         },
         "killStack.autoRefreshInterval": {

@@ -1,110 +1,95 @@
 # Kill Stack
 
-A VS Code extension that lets you view, inspect, and Kill forgotten local server processes right from your editor.
+Kill Stack is a VS Code extension for finding and shutting down forgotten local dev servers without leaving your editor.
 
----
+It gives you a live process count in the status bar, a dashboard for reviewing active local services, and one-click controls for cleaning them up when you are done.
 
-## Features
+## Why Use Kill Stack
 
-### 🟢 Status Bar Button
+- See which local servers are still running
+- Inspect process details before killing anything
+- Shut down individual processes or clear everything at once
+- Optionally kill leftover servers when VS Code closes
 
-A live button in the status bar shows how many local server processes are running. Click it to open the Kill Stack dashboard.
+## What You Get
 
-- **Grey** → No local server processes running
-- **Green** → One or more local server processes detected
+### Status Bar Signal
 
-### 🧭 Kill Stack Dashboard
+Kill Stack adds a live status bar button that shows whether local server processes are running. Click it to open the dashboard.
 
-A dedicated webview dashboard gives you a fuller look at local dev servers, tunnels, and runtime processes before you kill anything:
+- `Grey`: no local server processes detected
+- `Green`: one or more local server processes detected
+
+### Dashboard
+
+The dashboard helps you review what is running before you take action.
 
 | Field | Description |
 |---|---|
-| **Framework** | Detected framework, runtime, or tunnel type |
+| **Framework** | Detected framework, runtime, or tunnel |
 | **PID** | Process ID |
 | **Memory** | Current memory usage |
 | **Elapsed** | How long the process has been running, when available |
-| **Executable** | Full binary path |
-| **Arguments** | Full server arguments |
+| **Executable** | Full executable path |
+| **Arguments** | Full command arguments |
 
-Each process gets its own card with framework labeling, the full command line, and a dedicated kill button, which makes it much easier to tell similar servers apart.
+Each process is shown in its own card so it is easier to distinguish similar local servers.
 
-### ⚡ Commands
+### Commands
 
 | Command | Description |
 |---|---|
-| `Kill Stack: Open Dashboard` | Open the Kill Stack webview |
+| `Kill Stack: Open Dashboard` | Open the Kill Stack dashboard |
 | `Kill Stack: Kill All Local Servers` | Kill every detected local server process |
-| `Kill Stack: Refresh Dashboard` | Manually refresh the dashboard |
+| `Kill Stack: Refresh Dashboard` | Refresh the dashboard |
 
-### 🚪 Kill on Exit
+### Kill On Exit
 
-When you close VS Code, the extension can prompt you to kill any remaining local server processes. On macOS, you’ll see a native system dialog asking whether to kill them or leave them running. You can also toggle this directly from the dashboard.
+Kill Stack can clean up local server processes when VS Code closes.
 
----
+- On macOS, the extension prompts before killing processes
+- On Windows and Linux, processes are killed on exit without a blocking prompt
+- You can toggle this setting from the dashboard. This feature is OFF by default
 
 ## Settings
 
 | Setting | Default | Description |
 |---|---|---|
-| `kill Stack.killOnExit` | `true` | Kill local server processes when VS Code closes. On macOS, prompt first |
-| `kill Stack.autoRefreshInterval` | `5` | Auto-refresh interval in seconds (0 = disabled) |
+| `killStack.killOnExit` | `false` | Kill local server processes when VS Code closes |
+| `killStack.autoRefreshInterval` | `5` | Auto-refresh interval in seconds. Use `0` to disable |
 
----
+## Detection Scope
 
-## Installation
+Kill Stack is built to detect common local development processes across multiple runtimes and tools, including:
 
-### Option A — Install from VSIX (recommended)
+- Node-based dev servers
+- Python local servers
+- PHP built-in servers
+- Ruby app servers
+- Common Java and Go local server patterns
+- `ngrok`
+- `cloudflared`
 
-1. Open VS Code
-2. Press `Ctrl+Shift+P` / `Cmd+Shift+P`
-3. Run **Extensions: Install from VSIX...**
-4. Select the `.vsix` file
+It is designed for real-world local development workflows, not as a guarantee that every custom process pattern will be detected.
 
-### Option B — Run from source
+## Getting Started
 
-```bash
-# 1. Clone / copy the extension folder
-cd node-ext
+After installing Kill Stack, open the dashboard from the status bar or run `Kill Stack: Open Dashboard` from the Command Palette.
 
-# 2. Install dependencies
-npm install
+From there you can:
 
-# 3. Compile TypeScript
-npm run compile
+- review active local server processes
+- kill individual processes
+- kill everything in one action
+- turn `Kill On Exit` on or off
 
-# 4. Open in VS Code
-code .
+## Platform Support
 
-# 5. Press F5 to launch an Extension Development Host
-```
-
-### Packaging to VSIX
-
-```bash
-npm install -g @vscode/vsce
-vsce package
-# Produces: kill-stack-1.0.0.vsix
-```
-
----
-
-## Platform Notes
-
-| Platform | Process Detection | Kill Method |
+| Platform | Detection | Kill Method |
 |---|---|---|
 | macOS | `ps -axo pid=,pcpu=,pmem=,etime=,command=` | `kill -9 <pid>` |
 | Linux | `ps -axo pid=,pcpu=,pmem=,etime=,command=` | `kill -9 <pid>` |
 | Windows | `Get-CimInstance Win32_Process` | `taskkill /PID /F` |
-
-On macOS, the kill-on-exit dialog is a native system alert via `osascript`. On Windows and Linux, processes are killed on exit without a blocking prompt at that point.
-
-## Detection Scope
-
-Kill Stack detects many common local server frameworks, runtimes, and tunnels, including Node-based dev servers, Python local servers, PHP built-in servers, Ruby app servers, Java/Go local server patterns, `ngrok`, and `cloudflared`.
-
-It is designed to catch common forgotten local processes, not to guarantee detection of every custom framework or one-off command.
-
----
 
 ## License
 
