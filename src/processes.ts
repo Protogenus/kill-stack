@@ -107,147 +107,156 @@ export function classifyLocalServerProcess(
   imageName = ""
 ): string | undefined {
   const haystack = ` ${command} ${args} ${imageName} `.toLowerCase();
+  const normalizedHaystack = haystack.replace(/\\/g, "/");
   const executable = command.replace(/\\/g, "/").split("/").pop()?.toLowerCase() ?? "";
   const image = imageName.toLowerCase();
 
-  if (matchesAny(haystack, ["next/dist/bin/next", "@next", " next "])) {
+  if (
+    normalizedHaystack.includes("next/dist/bin/next") ||
+    /\bnext\s+(dev|start)\b/.test(haystack)
+  ) {
     return "Next.js";
   }
 
-  if (matchesAny(haystack, ["vite/bin/vite", " vite ", "/vite"])) {
+  if (
+    normalizedHaystack.includes("/vite/bin/vite") ||
+    /\bvite(?:\.js)?(?:\s|$)/.test(haystack)
+  ) {
     return "Vite";
   }
 
-  if (matchesAny(haystack, ["vite\\bin\\vite", "\\vite\\"])) {
-    return "Vite";
-  }
-
-  if (matchesAny(haystack, ["nuxt", "nuxi"])) {
+  if (containsAnyToken(haystack, ["nuxt", "nuxi"])) {
     return "Nuxt";
   }
 
-  if (matchesAny(haystack, ["svelte-kit", "@sveltejs/kit"])) {
+  if (
+    containsToken(haystack, "svelte-kit") ||
+    normalizedHaystack.includes("@sveltejs/kit")
+  ) {
     return "SvelteKit";
   }
 
-  if (matchesAny(haystack, ["astro"])) {
+  if (containsToken(haystack, "astro")) {
     return "Astro";
   }
 
-  if (matchesAny(haystack, ["remix", "@remix-run"])) {
+  if (containsToken(haystack, "remix") || normalizedHaystack.includes("@remix-run")) {
     return "Remix";
   }
 
-  if (matchesAny(haystack, ["nestjs", "@nestjs", " nest "])) {
+  if (containsAnyToken(haystack, ["nestjs", "@nestjs"]) || /\bnest\s+start\b/.test(haystack)) {
     return "NestJS";
   }
 
-  if (matchesAny(haystack, ["express"])) {
+  if (containsToken(haystack, "express")) {
     return "Express";
   }
 
-  if (matchesAny(haystack, ["socket.io"])) {
+  if (containsToken(haystack, "socket.io")) {
     return "Socket.IO";
   }
 
-  if (matchesAny(haystack, ["fastify"])) {
+  if (containsToken(haystack, "fastify")) {
     return "Fastify";
   }
 
-  if (matchesAny(haystack, ["koa"])) {
+  if (containsToken(haystack, "koa")) {
     return "Koa";
   }
 
   if (
-    matchesAny(haystack, [
-      "bullmq",
-      "/jobs/",
-      "\\jobs\\",
-      "/worker.js",
-      "\\worker.js",
-      "/workers/",
-      "\\workers\\",
-      " queue-worker",
-      " worker:",
-      " worker --",
-    ])
+    isJavaScriptRuntime(executable, image) &&
+    (
+      containsToken(haystack, "bullmq") ||
+      normalizedHaystack.includes("/jobs/") ||
+      normalizedHaystack.includes("/worker.js") ||
+      normalizedHaystack.includes("/workers/") ||
+      containsToken(haystack, "queue-worker") ||
+      /\bworker:(?=\s|$)/.test(haystack) ||
+      /\bworker\s+--/.test(haystack)
+    )
   ) {
     return "Worker";
   }
 
-  if (matchesAny(haystack, ["nodemon"])) {
+  if (containsToken(haystack, "nodemon")) {
     return "Nodemon";
   }
 
-  if (matchesAny(haystack, ["ts-node"])) {
+  if (containsToken(haystack, "ts-node")) {
     return "ts-node";
   }
 
-  if (matchesAny(haystack, ["tsx"])) {
+  if (containsToken(haystack, "tsx")) {
     return "tsx";
   }
 
-  if (matchesAny(haystack, ["bun"])) {
+  if (isBunRuntime(executable, image) || containsToken(haystack, "bun")) {
     return "Bun";
   }
 
-  if (matchesAny(haystack, ["deno"])) {
+  if (isDenoRuntime(executable, image) || containsToken(haystack, "deno")) {
     return "Deno";
   }
 
-  if (matchesAny(haystack, ["webpack-dev-server", "webpack serve"])) {
+  if (containsToken(haystack, "webpack-dev-server") || /\bwebpack\s+serve\b/.test(haystack)) {
     return "Webpack Dev Server";
   }
 
   if (
-    matchesAny(haystack, [
-      "python -m http.server",
-      "python3 -m http.server",
-      " -m http.server",
-    ])
+    /\bpython(?:\d+(?:\.\d+)*)?\s+-m\s+http\.server\b/.test(haystack) ||
+    /(^|[^a-z0-9])-m\s+http\.server\b/.test(haystack)
   ) {
     return "Python HTTP Server";
   }
 
-  if (matchesAny(haystack, ["uvicorn"])) {
+  if (containsToken(haystack, "uvicorn")) {
     return "Uvicorn";
   }
 
-  if (matchesAny(haystack, ["gunicorn"])) {
+  if (containsToken(haystack, "gunicorn")) {
     return "Gunicorn";
   }
 
-  if (matchesAny(haystack, ["flask run", "flask.exe"])) {
+  if (/\bflask(?:\.exe)?\s+run\b/.test(haystack) || containsToken(haystack, "flask.exe")) {
     return "Flask";
   }
 
-  if (matchesAny(haystack, ["manage.py runserver", "django"])) {
+  if (/\bmanage\.py\s+runserver\b/.test(haystack) || containsToken(haystack, "django")) {
     return "Django";
   }
 
-  if (matchesAny(haystack, ["php -s", "php.exe -s"])) {
+  if (/\bphp(?:\.exe)?\s+-s\b/.test(haystack)) {
     return "PHP Built-in Server";
   }
 
-  if (matchesAny(haystack, ["rails server", "puma", "rackup"])) {
+  if (/\brails\s+server\b/.test(haystack) || containsAnyToken(haystack, ["puma", "rackup"])) {
     return "Ruby Server";
   }
 
-  if (matchesAny(haystack, ["ngrok"])) {
+  if (containsToken(haystack, "ngrok")) {
     return "ngrok";
   }
 
-  if (matchesAny(haystack, ["cloudflared"])) {
+  if (containsToken(haystack, "cloudflared")) {
     return "Cloudflare Tunnel";
   }
 
-  if (matchesAny(haystack, ["java", "spring-boot", "quarkus", "jetty", "tomcat"])) {
-    if (matchesAny(haystack, ["-jar", "spring-boot", "quarkus", "jetty", "tomcat"])) {
-      return "Java Server";
-    }
+  if (
+    isJavaRuntime(executable, image) &&
+    (
+      haystack.includes(" -jar ") ||
+      containsAnyToken(haystack, ["spring-boot", "quarkus", "jetty", "tomcat"])
+    )
+  ) {
+    return "Java Server";
   }
 
-  if (matchesAny(haystack, ["go run", "air ", "gin "])) {
+  if (
+    (isGoRuntime(executable, image) && matchesAny(haystack, ["go run", " run "])) ||
+    isAirRuntime(executable, image) ||
+    isGinRuntime(executable, image)
+  ) {
     return "Go Server";
   }
 
@@ -327,6 +336,19 @@ function matchesAny(value: string, patterns: string[]): boolean {
   return patterns.some((pattern) => value.includes(pattern));
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function containsToken(value: string, token: string): boolean {
+  const pattern = new RegExp(`(^|[^a-z0-9])${escapeRegExp(token)}(?=$|[^a-z0-9])`);
+  return pattern.test(value);
+}
+
+function containsAnyToken(value: string, tokens: string[]): boolean {
+  return tokens.some((token) => containsToken(value, token));
+}
+
 function isPlainNodeRuntime(executable: string, image: string): boolean {
   return executable === "node" || executable === "node.exe" || image === "node.exe";
 }
@@ -346,6 +368,39 @@ function isRubyRuntime(executable: string, image: string): boolean {
   return executable === "ruby" || executable === "ruby.exe" || image === "ruby.exe";
 }
 
+function isBunRuntime(executable: string, image: string): boolean {
+  return executable === "bun" || executable === "bun.exe" || image === "bun.exe";
+}
+
+function isDenoRuntime(executable: string, image: string): boolean {
+  return executable === "deno" || executable === "deno.exe" || image === "deno.exe";
+}
+
+function isJavaRuntime(executable: string, image: string): boolean {
+  return executable === "java" || executable === "java.exe" || image === "java.exe";
+}
+
+function isGoRuntime(executable: string, image: string): boolean {
+  return executable === "go" || executable === "go.exe" || image === "go.exe";
+}
+
+function isAirRuntime(executable: string, image: string): boolean {
+  return executable === "air" || executable === "air.exe" || image === "air.exe";
+}
+
+function isGinRuntime(executable: string, image: string): boolean {
+  return executable === "gin" || executable === "gin.exe" || image === "gin.exe";
+}
+
+function isJavaScriptRuntime(executable: string, image: string): boolean {
+  return (
+    isPlainNodeRuntime(executable, image) ||
+    isBunRuntime(executable, image) ||
+    isDenoRuntime(executable, image) ||
+    containsAnyToken(` ${executable} ${image} `, ["nodemon", "ts-node", "tsx"])
+  );
+}
+
 function looksLikeServerCommand(value: string): boolean {
   return matchesAny(value, [
     " dev ",
@@ -353,11 +408,13 @@ function looksLikeServerCommand(value: string): boolean {
     " server",
     " serve",
     " preview",
-    " api",
-    " watch",
     "localhost",
     "127.0.0.1",
+    "0.0.0.0",
     "--port",
+    "-p ",
+    "--host",
+    "--hostname",
     "http://",
   ]);
 }

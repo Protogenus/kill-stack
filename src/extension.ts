@@ -129,11 +129,17 @@ function getKillOnExitSetting(): boolean {
   return getKillStackConfig().get<boolean>("killOnExit") ?? false;
 }
 
+function getKillOnExitTarget(): vscode.ConfigurationTarget {
+  return vscode.workspace.workspaceFolders?.length
+    ? vscode.ConfigurationTarget.Workspace
+    : vscode.ConfigurationTarget.Global;
+}
+
 async function setKillOnExitSetting(enabled: boolean): Promise<void> {
   await getKillStackConfig().update(
     "killOnExit",
     enabled,
-    vscode.ConfigurationTarget.Global,
+    getKillOnExitTarget(),
   );
 }
 
@@ -351,7 +357,7 @@ class KillStackPanel implements vscode.Disposable {
         margin: 0;
         font-size: 30px;
         line-height: 1.05;
-        color: #000000;
+        color: rgba(255, 255, 255, 0.98);
         letter-spacing: -0.02em;
       }
 
@@ -364,7 +370,7 @@ class KillStackPanel implements vscode.Disposable {
       .hero p {
         margin: 6px 0 0;
         max-width: 44ch;
-        color: #000000;
+        color: rgba(255, 255, 255, 0.86);
       }
 
       .actions {

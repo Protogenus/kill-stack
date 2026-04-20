@@ -141,10 +141,58 @@ test("classifyLocalServerProcess labels common frameworks and tools", () => {
     "ngrok"
   );
   assert.equal(
+    classifyLocalServerProcess("go", "run main.go"),
+    "Go Server"
+  );
+  assert.equal(
+    classifyLocalServerProcess("bun", "run --hot server.ts"),
+    "Bun"
+  );
+  assert.equal(
+    classifyLocalServerProcess("deno", "run --allow-net server.ts"),
+    "Deno"
+  );
+  assert.equal(
     classifyLocalServerProcess("/usr/local/bin/node", "/workspace/server.js --port 3000"),
     "Node.js"
   );
   assert.equal(classifyLocalServerProcess("node", "build-script.js"), undefined);
+  assert.equal(
+    classifyLocalServerProcess("/usr/local/bin/node", "/workspace/scripts/watch-assets.js"),
+    undefined
+  );
+  assert.equal(
+    classifyLocalServerProcess("/usr/local/bin/node", "/workspace/api-client.js"),
+    undefined
+  );
+  assert.equal(
+    classifyLocalServerProcess("/usr/local/bin/node", "/workspace/expression.js"),
+    undefined
+  );
+  assert.equal(
+    classifyLocalServerProcess("/usr/local/bin/node", "/workspace/koala.js"),
+    undefined
+  );
+  assert.equal(
+    classifyLocalServerProcess("/usr/local/bin/node", "/workspace/astronaut.js"),
+    undefined
+  );
+  assert.equal(
+    classifyLocalServerProcess("/usr/local/bin/node", "/workspace/bundle.js"),
+    undefined
+  );
+  assert.equal(
+    classifyLocalServerProcess("/usr/local/bin/node", "/workspace/denote.js"),
+    undefined
+  );
+  assert.equal(
+    classifyLocalServerProcess(
+      "C:\\Users\\vapor\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe",
+      "--max-old-space-size=3072 c:\\Users\\vapor\\.vscode\\extensions\\ms-vscode.vscode-typescript-next-6.0.20260416\\node_modules\\typescript\\lib\\tsserver.js --serverMode partialSemantic --useInferredProjectPerProjectRoot --disableAutomaticTypingAcquisition --cancellationPipeName C:\\Users\\vapor\\AppData\\Local\\Temp\\vscode-typescript\\tmp* --globalPlugins @vscode/copilot-typescript-server-plugin --pluginProbeLocations c:\\Users\\vapor\\.vscode\\extensions\\github.copilot-chat-0.44.1 --locale en --noGetErrOnBackgroundUpdate --canUseWatchEvents --validateDefaultNpmLocation --useNodeIpc",
+      "Code.exe"
+    ),
+    undefined
+  );
 });
 
 test("format helpers keep platform-specific values readable", () => {
