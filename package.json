@@ -3,7 +3,7 @@
   "displayName": "Stop Stack",
   "description": "Stop local server processes from VS Code. Includes a kill-on-exit option. Works on Windows, macOS, and Linux. Detects many common local server frameworks and tools.",
   "version": "1.0.0",
-  "publisher": "Protogenus",
+  "publisher": "RedRiverDesign",
   "repository": {
     "type": "git",
     "url": "https://github.com/Protogenus/stop-stack.git"
