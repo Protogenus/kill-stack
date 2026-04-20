@@ -113,7 +113,7 @@ function createStatusBarButton(
     100,
   );
   item.command = "killStack.showProcesses";
-  item.text = "$(circuit-board) Kill Stack";
+  item.text = "$(circuit-board) Check StacK";
   item.tooltip = "Open Kill Stack local server dashboard";
   item.color = KILL_STACK_GREEN;
   item.show();
@@ -150,11 +150,11 @@ async function updateStatusBar(
   const count = processes.length;
 
   if (count === 0) {
-    item.text = "$(circuit-board) Kill Stack";
+    item.text = "$(circuit-board) Check StacK";
     item.tooltip = "No local dev servers running";
     item.backgroundColor = undefined;
   } else {
-    item.text = `$(circuit-board) Kill Stack (${count})`;
+    item.text = `$(circuit-board) Check StacK (${count})`;
     item.tooltip = `${count} local server process${
       count !== 1 ? "es" : ""
     } running`;
