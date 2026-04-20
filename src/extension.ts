@@ -436,7 +436,7 @@ class StopStackPanel implements vscode.Disposable {
       }
 
       .switch input:checked + .slider {
-        background: linear-gradient(135deg, var(--ss-blue-500), #3f8fe2);
+        background: linear-gradient(135deg, var(--ss-red-500), var(--ss-red-700));
       }
 
       .switch input:checked + .slider::after {
@@ -474,15 +474,21 @@ class StopStackPanel implements vscode.Disposable {
       }
 
       .secondary {
-        background: rgba(243, 249, 255, 0.96);
+        background: linear-gradient(135deg, #dff0ff, #bfe1ff);
         color: var(--ss-ink);
-        border-color: rgba(95, 174, 255, 0.24);
+        border-color: rgba(95, 174, 255, 0.36);
       }
 
       .danger {
         background: linear-gradient(135deg, var(--ss-blue-500), #3f8fe2);
         color: #0d1c30;
         border-color: rgba(16, 32, 21, 0.08);
+      }
+
+      .danger-all {
+        background: linear-gradient(135deg, var(--ss-red-500), var(--ss-red-700));
+        color: #ffffff;
+        border-color: rgba(120, 20, 20, 0.22);
       }
 
       .stats {
@@ -516,7 +522,7 @@ class StopStackPanel implements vscode.Disposable {
       .surface {
         border-radius: 0;
         border: 1px solid rgba(255, 255, 255, 0.14);
-        background: rgba(248, 252, 255, 0.92);
+        background: rgba(226, 238, 250, 0.96);
         overflow: hidden;
         box-shadow: 0 16px 30px rgba(10, 44, 86, 0.11);
       }
@@ -566,7 +572,7 @@ class StopStackPanel implements vscode.Disposable {
         border-radius: 0;
         border: 1px solid rgba(27, 92, 171, 0.34);
         background:
-          linear-gradient(180deg, rgba(250, 253, 255, 0.98), rgba(236, 245, 255, 0.94));
+          linear-gradient(180deg, rgba(220, 235, 250, 0.98), rgba(206, 225, 244, 0.96));
       }
 
       .card-top {
@@ -609,8 +615,8 @@ class StopStackPanel implements vscode.Disposable {
       .metric {
         padding: 8px 10px;
         border-radius: 0;
-        background: rgba(255, 255, 255, 0.78);
-        border: 1px solid rgba(95, 174, 255, 0.14);
+        background: rgba(198, 220, 243, 0.92);
+        border: 1px solid rgba(49, 145, 224, 0.24);
       }
 
       .metric-label {
@@ -634,14 +640,15 @@ class StopStackPanel implements vscode.Disposable {
         text-transform: uppercase;
         letter-spacing: 0.08em;
         color: rgba(68, 91, 120, 0.74);
+        font-weight: 800;
       }
 
       pre {
         margin: 0;
         padding: 8px 10px;
         border-radius: 0;
-        background: rgba(255, 255, 255, 0.84);
-        border: 1px solid rgba(49, 145, 224, 0.14);
+        background: rgba(194, 216, 240, 0.94);
+        border: 1px solid rgba(27, 92, 171, 0.24);
         overflow-x: auto;
         white-space: pre-wrap;
         word-break: break-word;
@@ -697,7 +704,7 @@ class StopStackPanel implements vscode.Disposable {
             <div class="toggle-help" id="killOnExitLabel">Stops detected local servers when VS Code closes.</div>
           </div>
           <button class="secondary" id="refreshButton">Refresh</button>
-          <button class="danger" id="killAllButton">Kill All</button>
+          <button class="danger-all" id="killAllButton">Kill All</button>
         </div>
       </section>
 
@@ -792,7 +799,7 @@ class StopStackPanel implements vscode.Disposable {
                     \${elapsedBadge}
                   </div>
                 </div>
-                <button class="danger" data-kill="\${escapeHtml(String(process.pid))}">
+                <button class="danger-all" data-kill="\${escapeHtml(String(process.pid))}">
                   Kill PID \${escapeHtml(String(process.pid))}
                 </button>
               </div>
