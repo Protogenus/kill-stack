@@ -413,42 +413,68 @@ class KillStackPanel implements vscode.Disposable {
         position: relative;
         display: inline-flex;
         align-items: center;
-        width: 46px;
-        height: 24px;
+        width: 48px;
+        height: 28px;
+        flex: 0 0 auto;
       }
 
       .switch input {
         position: absolute;
+        inset: 0;
+        margin: 0;
         opacity: 0;
-        pointer-events: none;
+        cursor: pointer;
+        z-index: 1;
       }
 
       .slider {
         position: absolute;
         inset: 0;
-        background: rgba(68, 91, 120, 0.26);
-        border: 1px solid rgba(68, 91, 120, 0.18);
-        transition: background 120ms ease;
+        border-radius: 999px;
+        background: linear-gradient(135deg, rgba(68, 91, 120, 0.2), rgba(68, 91, 120, 0.32));
+        border: 1px solid rgba(68, 91, 120, 0.22);
+        box-shadow:
+          inset 0 1px 1px rgba(255, 255, 255, 0.28),
+          inset 0 -1px 1px rgba(11, 92, 171, 0.08);
+        transition:
+          background 120ms ease,
+          border-color 120ms ease,
+          box-shadow 120ms ease;
       }
 
       .slider::after {
         content: "";
         position: absolute;
-        top: 2px;
-        left: 2px;
-        width: 18px;
-        height: 18px;
+        top: 3px;
+        left: 3px;
+        width: 20px;
+        height: 20px;
         background: #ffffff;
+        border-radius: 50%;
         border: 1px solid rgba(27, 42, 64, 0.08);
-        transition: transform 120ms ease;
+        box-shadow:
+          0 1px 3px rgba(11, 32, 58, 0.24),
+          inset 0 1px 0 rgba(255, 255, 255, 0.8);
+        transition:
+          transform 120ms ease,
+          box-shadow 120ms ease;
       }
 
       .switch input:checked + .slider {
         background: linear-gradient(135deg, var(--ss-red-500), var(--ss-red-700));
+        border-color: rgba(169, 44, 44, 0.5);
       }
 
       .switch input:checked + .slider::after {
-        transform: translateX(22px);
+        transform: translateX(20px);
+      }
+
+      .switch input:focus-visible + .slider {
+        box-shadow:
+          0 0 0 2px rgba(255, 255, 255, 0.7),
+          0 0 0 4px rgba(95, 174, 255, 0.5),
+          inset 0 1px 1px rgba(255, 255, 255, 0.28),
+          inset 0 -1px 1px rgba(11, 92, 171, 0.08);
       }
 
       button {
@@ -569,14 +595,14 @@ class KillStackPanel implements vscode.Disposable {
 
       .grid {
         display: grid;
-        gap: 8px;
-        padding: 10px;
+        gap: 6px;
+        padding: 8px;
       }
 
       .card {
         display: grid;
-        gap: 8px;
-        padding: 11px;
+        gap: 6px;
+        padding: 9px;
         border-radius: 0;
         border: 1px solid rgba(27, 92, 171, 0.34);
         background:
@@ -585,66 +611,82 @@ class KillStackPanel implements vscode.Disposable {
 
       .card-top {
         display: flex;
-        align-items: flex-start;
+        align-items: center;
         justify-content: space-between;
         gap: 8px;
       }
 
       .process-title {
         display: grid;
-        gap: 4px;
+        gap: 3px;
+        min-width: 0;
       }
 
       .process-title strong {
-        font-size: 15px;
+        font-size: 14px;
         color: var(--ss-ink);
       }
 
       .badge-row {
         display: flex;
-        gap: 8px;
+        gap: 6px;
         flex-wrap: wrap;
       }
 
       .badge {
-        padding: 5px 8px;
+        padding: 4px 7px;
         border-radius: 0;
-        font-size: 11px;
+        font-size: 10px;
         color: var(--ss-ink-soft);
         background: rgba(95, 174, 255, 0.18);
       }
 
       .metrics {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-        gap: 6px;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 5px;
       }
 
       .metric {
-        padding: 8px 10px;
+        padding: 6px 8px;
         border-radius: 0;
         background: rgba(198, 220, 243, 0.92);
         border: 1px solid rgba(49, 145, 224, 0.24);
+        min-width: 0;
       }
 
       .metric-label {
-        font-size: 12px;
+        font-size: 11px;
         color: rgba(68, 91, 120, 0.72);
       }
 
       .metric-value {
-        margin-top: 4px;
+        margin-top: 2px;
         font-weight: 600;
+        font-size: 12px;
         color: var(--ss-ink);
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .details {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 5px;
+      }
+
+      .details.single {
+        grid-template-columns: 1fr;
       }
 
       .stack {
         display: grid;
-        gap: 6px;
+        gap: 4px;
+        min-width: 0;
       }
 
       .stack label {
-        font-size: 12px;
+        font-size: 11px;
         text-transform: uppercase;
         letter-spacing: 0.08em;
         color: rgba(68, 91, 120, 0.74);
@@ -653,7 +695,7 @@ class KillStackPanel implements vscode.Disposable {
 
       pre {
         margin: 0;
-        padding: 8px 10px;
+        padding: 6px 8px;
         border-radius: 0;
         background: rgba(194, 216, 240, 0.94);
         border: 1px solid rgba(27, 92, 171, 0.24);
@@ -662,8 +704,9 @@ class KillStackPanel implements vscode.Disposable {
         word-break: break-word;
         font-family: var(--vscode-editor-font-family);
         font-size: 10px;
-        line-height: 1.4;
+        line-height: 1.3;
         color: var(--ss-ink);
+        max-height: 72px;
       }
 
       @media (max-width: 760px) {
@@ -685,6 +728,11 @@ class KillStackPanel implements vscode.Disposable {
         }
 
         .card-top {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .details {
           grid-template-columns: 1fr;
         }
       }
@@ -792,9 +840,19 @@ class KillStackPanel implements vscode.Disposable {
           const fullCommand = process.args
             ? process.command + " " + process.args
             : process.command;
+          const hasArgs = Boolean(process.args);
           const elapsedBadge = process.elapsed && process.elapsed !== "?"
             ? '<span class="badge">' + escapeHtml(process.elapsed) + ' elapsed</span>'
             : '';
+          const detailClass = hasArgs ? "details" : "details single";
+          const argsBlock = hasArgs
+            ? \`
+              <div class="stack">
+                <label>Arguments</label>
+                <pre>\${escapeHtml(process.args)}</pre>
+              </div>
+            \`
+            : "";
 
           return \`
             <article class="card">
@@ -821,13 +879,12 @@ class KillStackPanel implements vscode.Disposable {
                   <div class="metric-value">\${escapeHtml(process.command)}</div>
                 </div>
               </div>
-              <div class="stack">
-                <label>Full Command</label>
-                <pre>\${escapeHtml(fullCommand)}</pre>
-              </div>
-              <div class="stack">
-                <label>Arguments</label>
-                <pre>\${escapeHtml(process.args || "(none)")}</pre>
+              <div class="\${detailClass}">
+                <div class="stack">
+                  <label>Full Command</label>
+                  <pre>\${escapeHtml(fullCommand)}</pre>
+                </div>
+                \${argsBlock}
               </div>
             </article>
           \`;

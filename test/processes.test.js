@@ -166,6 +166,10 @@ test("classifyLocalServerProcess labels common frameworks and tools", () => {
     undefined
   );
   assert.equal(
+    classifyLocalServerProcess("/usr/local/bin/node", "/workspace/node_modules/typescript/bin/tsc --watch -p ./"),
+    undefined
+  );
+  assert.equal(
     classifyLocalServerProcess("/usr/local/bin/node", "/workspace/expression.js"),
     undefined
   );

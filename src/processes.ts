@@ -412,7 +412,6 @@ function looksLikeServerCommand(value: string): boolean {
     "127.0.0.1",
     "0.0.0.0",
     "--port",
-    "-p ",
     "--host",
     "--hostname",
     "http://",
