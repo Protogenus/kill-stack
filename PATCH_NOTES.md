@@ -33,6 +33,8 @@
 - Stopping a server also stops the processes it started, so ports are freed.
 - "Kill All" no longer freezes VS Code while servers are stopped.
 - Overlapping refreshes no longer pile up when the system is busy.
+- Python servers on Windows no longer appear twice. The `python.exe` launcher
+  and the Python it starts are shown as one server.
 
 ### Changed
 

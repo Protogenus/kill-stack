@@ -13,6 +13,7 @@ import {
 } from "./killing";
 import {
   applyWindowsCpu,
+  collapseLauncherChildren,
   CpuSample,
   formatCpu,
   formatMemory,
@@ -64,7 +65,7 @@ const WINDOWS_PROCESS_LIST_COMMAND = [
   [
     "-NoProfile",
     "-Command",
-    `Get-CimInstance -ClassName Win32_Process -Filter "${WINDOWS_SERVER_IMAGE_FILTER}" | Select-Object ProcessId, Name, CommandLine, WorkingSetSize, KernelModeTime, UserModeTime, @{Name='CreationDate';Expression={if($_.CreationDate){$_.CreationDate.ToUniversalTime().ToString('o')}}} | ConvertTo-Json -Compress`,
+    `Get-CimInstance -ClassName Win32_Process -Filter "${WINDOWS_SERVER_IMAGE_FILTER}" | Select-Object ProcessId, ParentProcessId, Name, CommandLine, WorkingSetSize, KernelModeTime, UserModeTime, @{Name='CreationDate';Expression={if($_.CreationDate){$_.CreationDate.ToUniversalTime().ToString('o')}}} | ConvertTo-Json -Compress`,
   ],
 ] as const;
 
@@ -231,10 +232,12 @@ async function getServerProcesses(): Promise<ServerProcess[]> {
   ]);
   await attachWorkingDirectories(processes);
 
-  return processes.map((proc) => ({
-    ...proc,
-    ports: ports.get(proc.pid) ?? [],
-  }));
+  return collapseLauncherChildren(
+    processes.map((proc) => ({
+      ...proc,
+      ports: ports.get(proc.pid) ?? [],
+    })),
+  );
 }
 
 // Synchronous variant for deactivate(): VS Code does not wait for async work

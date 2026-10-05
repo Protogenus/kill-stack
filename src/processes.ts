@@ -7,6 +7,8 @@ export interface ServerProcess {
   elapsed: string;
   framework: string;
   ports?: number[];
+  // Parent process ID, when the platform listing includes it (Windows).
+  ppid?: number;
   // Directory the process was started in, when the platform exposes it.
   cwd?: string;
   // Windows only: cumulative CPU time in 100-ns ticks, and the start time used to tell PIDs apart over time.
@@ -19,6 +21,7 @@ interface WindowsProcessRecord {
   CreationDate?: unknown;
   KernelModeTime?: unknown;
   Name?: unknown;
+  ParentProcessId?: unknown;
   ProcessId?: unknown;
   UserModeTime?: unknown;
   WorkingSetSize?: unknown;
@@ -97,6 +100,7 @@ export function parseWindowsProcesses(
     }
 
     const cpuTicks = normalizeCpuTicks(record);
+    const ppid = normalizeNumber(record.ParentProcessId);
     const startedAt = normalizeString(record.CreationDate);
 
     processes.push({
@@ -109,6 +113,7 @@ export function parseWindowsProcesses(
       framework,
       ...(cpuTicks !== undefined ? { cpuTicks } : {}),
       ...(startedAt ? { startedAt } : {}),
+      ...(ppid !== undefined ? { ppid } : {}),
     });
   }
 
@@ -124,6 +129,41 @@ function normalizeCpuTicks(record: WindowsProcessRecord): number | undefined {
 // Fills in cpu percentages from the change in CPU time since the previous
 // sample. Returns the samples to keep for the next call. Like `ps pcpu`, a value
 // of 100 means one full core. The first sample of a process stays "?".
+// Hides a process whose parent is also listed with the same arguments, such as
+// the real Python started by the Windows python.exe launcher. The parent row
+// stays, because killing it stops the child too, and it takes the child's ports
+// so the port is still shown.
+export function collapseLauncherChildren(
+  processes: ServerProcess[],
+): ServerProcess[] {
+  const byPid = new Map(processes.map((proc) => [proc.pid, proc]));
+  const sameArgs = (a: string, b: string) =>
+    a.replace(/\s+/g, " ").trim() === b.replace(/\s+/g, " ").trim();
+  const hidden = new Set<number>();
+
+  for (const proc of processes) {
+    const parent = proc.ppid !== undefined ? byPid.get(proc.ppid) : undefined;
+    if (parent && parent !== proc && sameArgs(parent.args, proc.args)) {
+      hidden.add(proc.pid);
+    }
+  }
+
+  return processes
+    .filter((proc) => !hidden.has(proc.pid))
+    .map((proc) => {
+      const childPorts = processes
+        .filter((child) => hidden.has(child.pid) && child.ppid === proc.pid)
+        .flatMap((child) => child.ports ?? []);
+      if (childPorts.length === 0) {
+        return proc;
+      }
+      const ports = [...new Set([...(proc.ports ?? []), ...childPorts])].sort(
+        (a, b) => a - b,
+      );
+      return { ...proc, ports };
+    });
+}
+
 export function applyWindowsCpu(
   processes: ServerProcess[],
   previous: Map<string, CpuSample>,
