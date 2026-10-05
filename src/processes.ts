@@ -1,4 +1,4 @@
-export interface NodeProcess {
+export interface ServerProcess {
   pid: number;
   command: string;
   args: string;
@@ -6,17 +6,31 @@ export interface NodeProcess {
   memory: string;
   elapsed: string;
   framework: string;
+  ports?: number[];
+  // Directory the process was started in, when the platform exposes it.
+  cwd?: string;
+  // Windows only: cumulative CPU time in 100-ns ticks, and the start time used to tell PIDs apart over time.
+  cpuTicks?: number;
+  startedAt?: string;
 }
 
 interface WindowsProcessRecord {
   CommandLine?: unknown;
+  CreationDate?: unknown;
+  KernelModeTime?: unknown;
   Name?: unknown;
   ProcessId?: unknown;
+  UserModeTime?: unknown;
   WorkingSetSize?: unknown;
 }
 
-export function parsePosixProcesses(raw: string): NodeProcess[] {
-  const processes: NodeProcess[] = [];
+export interface CpuSample {
+  ticks: number;
+  at: number;
+}
+
+export function parsePosixProcesses(raw: string): ServerProcess[] {
+  const processes: ServerProcess[] = [];
 
   for (const line of raw.split(/\r?\n/)) {
     const match = line.match(/^\s*(\d+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(.+)$/);
@@ -49,7 +63,10 @@ export function parsePosixProcesses(raw: string): NodeProcess[] {
   return processes;
 }
 
-export function parseWindowsProcesses(raw: string): NodeProcess[] {
+export function parseWindowsProcesses(
+  raw: string,
+  now = Date.now(),
+): ServerProcess[] {
   const trimmed = raw.trim();
   if (!trimmed) {
     return [];
@@ -63,7 +80,7 @@ export function parseWindowsProcesses(raw: string): NodeProcess[] {
   }
 
   const records = Array.isArray(parsed) ? parsed : [parsed];
-  const processes: NodeProcess[] = [];
+  const processes: ServerProcess[] = [];
 
   for (const record of records) {
     const pid = normalizeNumber(record.ProcessId);
@@ -79,18 +96,250 @@ export function parseWindowsProcesses(raw: string): NodeProcess[] {
       continue;
     }
 
+    const cpuTicks = normalizeCpuTicks(record);
+    const startedAt = normalizeString(record.CreationDate);
+
     processes.push({
       pid,
       command,
       args,
       cpu: "?",
       memory: formatWindowsMemory(record.WorkingSetSize),
-      elapsed: "?",
+      elapsed: formatWindowsElapsed(record.CreationDate, now),
       framework,
+      ...(cpuTicks !== undefined ? { cpuTicks } : {}),
+      ...(startedAt ? { startedAt } : {}),
     });
   }
 
   return processes;
+}
+
+function normalizeCpuTicks(record: WindowsProcessRecord): number | undefined {
+  const kernel = normalizeNumber(record.KernelModeTime);
+  const user = normalizeNumber(record.UserModeTime);
+  return kernel === undefined || user === undefined ? undefined : kernel + user;
+}
+
+// Fills in cpu percentages from the change in CPU time since the previous
+// sample. Returns the samples to keep for the next call. Like `ps pcpu`, a value
+// of 100 means one full core. The first sample of a process stays "?".
+export function applyWindowsCpu(
+  processes: ServerProcess[],
+  previous: Map<string, CpuSample>,
+  now: number,
+): Map<string, CpuSample> {
+  const next = new Map<string, CpuSample>();
+
+  for (const proc of processes) {
+    if (proc.cpuTicks === undefined || !proc.startedAt) {
+      continue;
+    }
+
+    const key = `${proc.pid}|${proc.startedAt}`;
+    next.set(key, { ticks: proc.cpuTicks, at: now });
+
+    const prior = previous.get(key);
+    if (prior && now > prior.at && proc.cpuTicks >= prior.ticks) {
+      // 10,000 ticks of 100 ns make one millisecond.
+      const percent =
+        ((proc.cpuTicks - prior.ticks) / ((now - prior.at) * 10000)) * 100;
+      proc.cpu = percent.toFixed(1);
+    }
+  }
+
+  return next;
+}
+
+// Parses `ss -H -ltnp` output into PID -> listening ports (Linux).
+export function parseSsListeningPorts(raw: string): Map<number, number[]> {
+  const ports = new Map<number, number[]>();
+
+  for (const line of raw.split(/\r?\n/)) {
+    if (!line.startsWith("LISTEN")) {
+      continue;
+    }
+
+    const portMatch = line.match(/:(\d+)\s+\S+\s+users:/);
+    if (!portMatch) {
+      continue;
+    }
+
+    const port = Number(portMatch[1]);
+    for (const pidMatch of line.matchAll(/pid=(\d+)/g)) {
+      addListeningPort(ports, Number(pidMatch[1]), port);
+    }
+  }
+
+  return ports;
+}
+
+// Parses `lsof -a -d cwd -Fpn -p <pids>` output into PID -> working directory (macOS).
+export function parseLsofWorkingDirectories(raw: string): Map<number, string> {
+  const directories = new Map<number, string>();
+  let pid: number | undefined;
+
+  for (const line of raw.split(/\r?\n/)) {
+    if (line.startsWith("p")) {
+      pid = parseInt(line.slice(1), 10);
+    } else if (line.startsWith("n") && pid !== undefined) {
+      directories.set(pid, line.slice(1));
+    }
+  }
+
+  return directories;
+}
+
+// Parses `netstat -ano -p TCP` output into PID -> listening ports.
+export function parseNetstatListeningPorts(raw: string): Map<number, number[]> {
+  const ports = new Map<number, number[]>();
+
+  for (const line of raw.split(/\r?\n/)) {
+    const match = line.match(/^\s*TCP\s+\S+:(\d+)\s+\S+\s+LISTENING\s+(\d+)\s*$/i);
+    if (match) {
+      addListeningPort(ports, Number(match[2]), Number(match[1]));
+    }
+  }
+
+  return ports;
+}
+
+// Parses `lsof -nP -iTCP -sTCP:LISTEN -F pn` output into PID -> listening ports.
+export function parseLsofListeningPorts(raw: string): Map<number, number[]> {
+  const ports = new Map<number, number[]>();
+  let pid: number | undefined;
+
+  for (const line of raw.split(/\r?\n/)) {
+    if (line.startsWith("p")) {
+      pid = parseInt(line.slice(1), 10);
+    } else if (line.startsWith("n") && pid !== undefined) {
+      const match = line.match(/:(\d+)$/);
+      if (match) {
+        addListeningPort(ports, pid, Number(match[1]));
+      }
+    }
+  }
+
+  return ports;
+}
+
+function addListeningPort(
+  ports: Map<number, number[]>,
+  pid: number,
+  port: number,
+): void {
+  const existing = ports.get(pid) ?? [];
+  if (!existing.includes(port)) {
+    ports.set(pid, [...existing, port].sort((a, b) => a - b));
+  }
+}
+
+// True when the command line contains any ignore pattern (case-insensitive).
+export function matchesIgnorePattern(
+  proc: ServerProcess,
+  patterns: string[],
+): boolean {
+  const haystack = `${proc.command} ${proc.args}`.toLowerCase();
+  return patterns.some((pattern) => {
+    const needle = pattern.trim().toLowerCase();
+    return needle.length > 0 && haystack.includes(needle);
+  });
+}
+
+// Formats seconds like ps etime: mm:ss, hh:mm:ss, or d-hh:mm:ss.
+export function formatElapsed(totalSeconds: number): string {
+  const total = Math.max(0, Math.floor(totalSeconds));
+  const days = Math.floor(total / 86400);
+  const hours = Math.floor((total % 86400) / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const clock = `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+
+  if (days > 0) {
+    return `${days}-${clock}`;
+  }
+  if (hours > 0) {
+    return clock;
+  }
+  return `${pad(minutes)}:${pad(seconds)}`;
+}
+
+function formatWindowsElapsed(value: unknown, now: number): string {
+  if (typeof value !== "string") {
+    return "?";
+  }
+
+  // PowerShell emits ISO strings with 7 fractional digits; Date needs 3 or fewer.
+  const started = Date.parse(value.replace(/(\.\d{3})\d*Z$/, "$1Z"));
+  if (Number.isNaN(started)) {
+    return "?";
+  }
+
+  return formatElapsed((now - started) / 1000);
+}
+
+// Maps each parent PID to its direct child PIDs. Input is `ps -axo pid=,ppid=` output.
+export function parseProcessTree(raw: string): Map<number, number[]> {
+  const children = new Map<number, number[]>();
+
+  for (const line of raw.split(/\r?\n/)) {
+    const match = line.match(/^\s*(\d+)\s+(\d+)\s*$/);
+    if (!match) {
+      continue;
+    }
+
+    const pid = parseInt(match[1], 10);
+    const ppid = parseInt(match[2], 10);
+    children.set(ppid, [...(children.get(ppid) ?? []), pid]);
+  }
+
+  return children;
+}
+
+// Returns every descendant of pid, deepest first, so children are killed before their parents.
+export function collectDescendantPids(
+  pid: number,
+  children: Map<number, number[]>,
+): number[] {
+  const descendants: number[] = [];
+
+  for (const child of children.get(pid) ?? []) {
+    descendants.push(...collectDescendantPids(child, children), child);
+  }
+
+  return descendants;
+}
+
+// True when the process was started in one of the folders (its working
+// directory is inside it) or its command line references one. Folder matches
+// end at a path boundary so "/work/app" does not match "/work/app-old".
+export function isInWorkspaceFolders(
+  proc: ServerProcess,
+  folders: string[],
+): boolean {
+  const haystack = normalizePathText(`${proc.command} ${proc.args}`);
+  const cwd = proc.cwd ? normalizePathText(proc.cwd) : "";
+
+  return folders.some((folder) => {
+    const normalized = normalizePathText(folder).replace(/\/+$/, "");
+    if (!normalized) {
+      return false;
+    }
+
+    if (cwd && (cwd === normalized || cwd.startsWith(`${normalized}/`))) {
+      return true;
+    }
+
+    // Keep the slash on drive roots like "c:/" so the match stays anchored.
+    const root = /^[a-z]:$/.test(normalized) ? `${normalized}/` : normalized;
+    const boundary = root.endsWith("/") ? "" : `(?=$|[\\s"'/])`;
+    return new RegExp(`${escapeRegExp(root)}${boundary}`).test(haystack);
+  });
+}
+
+function normalizePathText(value: string): string {
+  return value.replace(/\\/g, "/").toLowerCase();
 }
 
 export function formatCpu(cpu: string): string {
