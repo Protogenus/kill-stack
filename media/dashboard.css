@@ -347,7 +347,7 @@ body {
   background: color-mix(in srgb, var(--ks-blue) 18%, transparent);
 }
 
-/* State cues on each row: yellow for stop on exit (a caution), muted for ignored. */
+/* Ignored servers are muted so it is clear Kill All and Kill On Exit skip them. */
 
 .row {
   box-shadow: inset 3px 0 0 var(--ks-blue);
@@ -356,10 +356,6 @@ body {
 
 .row:hover {
   border-color: color-mix(in srgb, var(--ks-blue) 45%, var(--vscode-panel-border));
-}
-
-.row.is-exit {
-  box-shadow: inset 3px 0 0 var(--vscode-editorWarning-foreground, #cca700);
 }
 
 .row.is-ignored {
@@ -390,10 +386,6 @@ body {
   font-size: 11px;
   line-height: 16px;
   white-space: nowrap;
-}
-
-.pill-exit {
-  color: var(--vscode-editorWarning-foreground, #cca700);
 }
 
 .pill-ignored {

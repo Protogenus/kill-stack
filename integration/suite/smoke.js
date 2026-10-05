@@ -41,6 +41,12 @@ async function startServer(scriptPath, port) {
   return child;
 }
 
+async function setIgnorePatterns(patterns) {
+  await vscode.workspace
+    .getConfiguration("killStack")
+    .update("ignorePatterns", patterns, vscode.ConfigurationTarget.Global);
+}
+
 async function setKillOnExit(enabled) {
   await vscode.workspace
     .getConfiguration("killStack")
@@ -129,6 +135,7 @@ suite("Kill Stack smoke tests", () => {
       }
     }
     await setKillOnExit(false);
+    await setIgnorePatterns(undefined);
   });
 
   test("activates and registers its commands", async () => {
@@ -151,26 +158,31 @@ suite("Kill Stack smoke tests", () => {
     assert.ok(views.some((view) => view.id === "killStack.servers"));
   });
 
-  test("kill on exit stops servers in the open folder and leaves others running", async function () {
+  test("kill on exit stops every server except ignored ones", async function () {
     // macOS shows a confirmation dialog on exit, which cannot be answered in a test.
     if (process.platform === "darwin") {
       this.skip();
     }
 
+    // One server in the open folder, one elsewhere, and one on the ignore list.
     const folder = vscode.workspace.workspaceFolders[0].uri.fsPath;
-    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), "killstack-outside-"));
-    const outsideScript = path.join(outsideDir, "server.js");
-    fs.writeFileSync(outsideScript, SERVER_SOURCE);
+    const elsewhereDir = fs.mkdtempSync(path.join(os.tmpdir(), "killstack-elsewhere-"));
+    const keptDir = fs.mkdtempSync(path.join(os.tmpdir(), "killstack-keep-"));
+    fs.writeFileSync(path.join(elsewhereDir, "server.js"), SERVER_SOURCE);
+    fs.writeFileSync(path.join(keptDir, "server.js"), SERVER_SOURCE);
 
-    const inside = await startServer(path.join(folder, "server.js"), 9101);
-    const outside = await startServer(outsideScript, 9102);
-    children.push(inside, outside);
+    const inFolder = await startServer(path.join(folder, "server.js"), 9101);
+    const elsewhere = await startServer(path.join(elsewhereDir, "server.js"), 9102);
+    const kept = await startServer(path.join(keptDir, "server.js"), 9103);
+    children.push(inFolder, elsewhere, kept);
 
+    await setIgnorePatterns(["killstack-keep"]);
     await setKillOnExit(true);
     callDeactivate();
 
-    assert.ok(await waitForExit(inside.pid), "server in the open folder should stop");
-    assert.ok(isAlive(outside.pid), "server outside the open folder should keep running");
+    assert.ok(await waitForExit(inFolder.pid), "server in the open folder should stop");
+    assert.ok(await waitForExit(elsewhere.pid), "server outside the open folder should stop");
+    assert.ok(isAlive(kept.pid), "ignored server should keep running");
   });
 
   test("the OS port listing includes the port a real listener opens", async () => {

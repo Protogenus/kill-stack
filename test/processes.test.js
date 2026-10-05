@@ -215,20 +215,6 @@ test("parseProcessTree and collectDescendantPids return children deepest first",
   assert.deepEqual(collectDescendantPids(14, tree), []);
 });
 
-test("isInWorkspaceFolders matches folders on path boundaries only", () => {
-  const { isInWorkspaceFolders } = require("../out/processes.js");
-  const proc = (args, command = "node") => ({
-    pid: 1, command, args, cpu: "?", memory: "?", elapsed: "?", framework: "Node.js",
-  });
-
-  assert.equal(isInWorkspaceFolders(proc("C:\\work\\app\\server.js"), ["C:\\work\\app"]), true);
-  assert.equal(isInWorkspaceFolders(proc("/work/app/node_modules/.bin/vite"), ["/work/app/"]), true);
-  assert.equal(isInWorkspaceFolders(proc("/work/app-old/server.js"), ["/work/app"]), false);
-  assert.equal(isInWorkspaceFolders(proc("/other/server.js"), ["/work/app"]), false);
-  assert.equal(isInWorkspaceFolders(proc("server.js"), []), false);
-  assert.equal(isInWorkspaceFolders(proc("C:/work/app/x.js", "C:\\Program Files\\nodejs\\node.exe"), ["c:\\work\\app"]), true);
-});
-
 test("parseWindowsProcesses derives elapsed time from CreationDate", () => {
   const { parseWindowsProcesses } = require("../out/processes.js");
   const now = Date.parse("2026-10-05T12:00:00Z");

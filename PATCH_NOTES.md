@@ -17,15 +17,13 @@
 - **Ignore list.** The new `killStack.ignorePatterns` setting names servers that
   Kill All and Kill On Exit should never stop. You can still stop them one at a
   time.
-- **Kill On Exit preview.** The dashboard marks which servers will stop when VS
-  Code closes, and which are on the ignore list.
+- **Readable server names.** Servers are named after their project and script,
+  such as `shop · vite` or `api-gateway · server.js`, instead of just
+  `node`.
 - **Uptime on Windows.** Servers now show how long they have been running on
   Windows.
 - **CPU usage.** Dashboard cards and the sidebar show each server's CPU usage.
   Windows shows it too.
-- **Relative-path servers on macOS and Linux.** A server started from inside
-  your project folder is stopped on exit even if its command line does not
-  include the folder path.
 
 ### Fixed
 
@@ -45,9 +43,7 @@
   panels stay put while it refreshes.
 - Clicking the status bar item now opens the Quick Menu. Open the full dashboard
   from the menu or the command palette.
-- Kill On Exit only stops servers started from your open folders. Servers in
-  other windows or terminals are left alone. With no folder open, nothing is
-  stopped.
+- Kill On Exit skips servers on the ignore list.
 - Stopping a server from the dashboard also stops its child processes.
 - Kill On Exit is saved as a user setting, so turning it on applies to every
   project. A value saved inside a project earlier still takes precedence there
@@ -60,10 +56,6 @@
 
 ### Known limitations
 
-- On Windows, a server started with a relative path, such as `node server.js`
-  from inside the project, is only recognized as belonging to your folder if its
-  command line includes the folder path. Elsewhere, Kill Stack also checks the
-  folder the server was started in.
 - On Windows, CPU usage shows "?" until the second refresh, since it is measured
   from the change between two samples.
 

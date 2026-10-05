@@ -16,7 +16,7 @@ import {
   CpuSample,
   formatCpu,
   formatMemory,
-  isInWorkspaceFolders,
+  describeServer,
   matchesIgnorePattern,
   ServerProcess,
   parseLsofListeningPorts,
@@ -362,11 +362,6 @@ function killPids(pids: number[]): Promise<KillCounts> {
   return killPidsAsync(pids, { isAlive, killTree: killProcessTree });
 }
 
-function shortenCommand(cmd: string): string {
-  const parts = cmd.replace(/\\/g, "/").split("/");
-  return parts[parts.length - 1] ?? cmd;
-}
-
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, "&amp;")
@@ -400,27 +395,25 @@ function getIgnorePatterns(): string[] {
   return getKillStackConfig().get<string[]>("ignorePatterns") ?? [];
 }
 
-function getWorkspaceFolderPaths(): string[] {
-  return vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? [];
-}
-
 function isIgnored(proc: ServerProcess): boolean {
   return matchesIgnorePattern(proc, getIgnorePatterns());
 }
 
-// Kill on exit would stop this server: it is in an open folder and not ignored.
+// Kill on exit stops every detected server except those on the ignore list.
 function stopsOnExit(proc: ServerProcess): boolean {
-  return (
-    isInWorkspaceFolders(proc, getWorkspaceFolderPaths()) && !isIgnored(proc)
-  );
+  return !isIgnored(proc);
+}
+
+// Recognizable name for a server, such as "shop · vite" instead of "node".
+function serverName(proc: ServerProcess): string {
+  return describeServer(proc).name;
 }
 
 function getKillOnExitSetting(): boolean {
   return getKillStackConfig().get<boolean>("killOnExit") ?? false;
 }
 
-// Always user-level: the setting applies to every project, and kill on exit
-// already limits itself to the open folders.
+// Always user-level, so the setting applies in every project.
 async function setKillOnExitSetting(enabled: boolean): Promise<void> {
   await getKillStackConfig().update(
     "killOnExit",
@@ -515,7 +508,7 @@ class KillStackPanel implements vscode.Disposable {
       killOnExitEnabled,
       processes: processes.map((process) => ({
         pid: process.pid,
-        label: shortenCommand(process.command),
+        label: serverName(process),
         framework: process.framework,
         command: process.command,
         args: process.args,
@@ -664,14 +657,10 @@ function formatPorts(proc: ServerProcess): string {
 // survives the periodic redraws.
 class ServerItem extends vscode.TreeItem {
   constructor(readonly proc: ServerProcess) {
-    super(shortenCommand(proc.command), vscode.TreeItemCollapsibleState.None);
+    super(serverName(proc), vscode.TreeItemCollapsibleState.None);
 
     const ports = formatPorts(proc);
-    const exitState = isIgnored(proc)
-      ? "ignored"
-      : getKillOnExitSetting() && stopsOnExit(proc)
-        ? "stops on exit"
-        : "";
+    const exitState = isIgnored(proc) ? "ignored" : "";
 
     this.id = String(proc.pid);
     this.contextValue = "server";
@@ -689,7 +678,7 @@ class ServerItem extends vscode.TreeItem {
     this.tooltip = [proc.command, proc.args].filter(Boolean).join(" ");
     this.accessibilityInformation = {
       label: [
-        `${proc.framework} server ${shortenCommand(proc.command)}`,
+        `${proc.framework} server ${serverName(proc)}`,
         `PID ${proc.pid}`,
         ports,
         exitState,
@@ -798,7 +787,7 @@ export async function activate(
     }
 
     const confirmed = await vscode.window.showWarningMessage(
-      `Kill "${shortenCommand(target.command)}" (PID ${pid})?`,
+      `Kill "${serverName(target)}" (PID ${pid})?`,
       {
         modal: true,
         detail: target.args
@@ -907,7 +896,7 @@ export async function activate(
     await syncUi();
 
     const picks: ServerPick[] = processes.map((proc) => ({
-      label: `$(server-process) ${shortenCommand(proc.command)}`,
+      label: `$(server-process) ${serverName(proc)}`,
       description: [proc.framework, formatPorts(proc)]
         .filter(Boolean)
         .join(" · "),
@@ -977,7 +966,7 @@ export async function activate(
     const describe = (pid: number): string => {
       const known = processes.find((proc) => proc.pid === pid);
       return known
-        ? `${shortenCommand(known.command)} (PID ${pid})`
+        ? `${serverName(known)} (PID ${pid})`
         : `PID ${pid}`;
     };
     const protectedCount = owners.length - targets.length;
@@ -1128,14 +1117,21 @@ export function deactivate(): void {
     return;
   }
 
-  // Only stop servers that belong to this window's folders and are not on the
-  // ignore list. With no folder open, nothing matches and nothing is killed.
-  const running = selectExitTargets(
+  // Stop every detected server that is not on the ignore list.
+  let running = selectExitTargets(
     getServerProcessesSync(),
-    getWorkspaceFolderPaths(),
     getIgnorePatterns(),
     true,
   );
+
+  // Test runs set this so they only stop the servers they started, never the
+  // developer's own servers on the same machine.
+  const testScope = process.env.KILLSTACK_TEST_ONLY_MATCH;
+  if (testScope) {
+    running = running.filter((proc) =>
+      `${proc.command} ${proc.args}`.toLowerCase().includes(testScope.toLowerCase()),
+    );
+  }
   if (running.length === 0) {
     return;
   }

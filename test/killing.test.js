@@ -42,23 +42,18 @@ test("posixTreeKillOrder lists descendants deepest first, then the root", () => 
 
 test("selectExitTargets returns nothing when kill on exit is off", () => {
   const procs = [server(1, "/work/app/server.js")];
-  assert.deepEqual(selectExitTargets(procs, ["/work/app"], [], false), []);
+  assert.deepEqual(selectExitTargets(procs, [], false), []);
 });
 
-test("selectExitTargets keeps only servers in open folders that are not ignored", () => {
+test("selectExitTargets stops every server except ignored ones", () => {
   const procs = [
     server(1, "/work/app/server.js"),
-    server(2, "/work/other/server.js"),
+    server(2, "/somewhere/else/server.js"),
     server(3, "/work/app/db-tunnel.js"),
   ];
 
-  const targets = selectExitTargets(procs, ["/work/app"], ["tunnel"], true);
-  assert.deepEqual(targets.map((proc) => proc.pid), [1]);
-});
-
-test("selectExitTargets with no open folder stops nothing", () => {
-  const procs = [server(1, "/work/app/server.js")];
-  assert.deepEqual(selectExitTargets(procs, [], [], true), []);
+  const targets = selectExitTargets(procs, ["tunnel"], true);
+  assert.deepEqual(targets.map((proc) => proc.pid), [1, 2]);
 });
 
 test("pidsOnPort returns every PID listening on the port", () => {

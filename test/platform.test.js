@@ -3,7 +3,6 @@ const assert = require("node:assert/strict");
 
 const {
   applyWindowsCpu,
-  isInWorkspaceFolders,
   parseLsofWorkingDirectories,
   parseSsListeningPorts,
   parseWindowsProcesses,
@@ -66,19 +65,6 @@ test("parseSsListeningPorts reads PID and port from ss output", () => {
 test("parseLsofWorkingDirectories maps PID to its cwd", () => {
   const raw = ["p812", "fcwd", "n/Users/dev/app/api", "p55", "fcwd", "n/"].join("\n");
   assert.deepEqual([...parseLsofWorkingDirectories(raw)], [[812, "/Users/dev/app/api"], [55, "/"]]);
-});
-
-test("isInWorkspaceFolders matches a server started from a relative path via its working directory", () => {
-  const relative = proc({ command: "node", args: "server.js", cwd: "/work/app/api" });
-  assert.equal(isInWorkspaceFolders(relative, ["/work/app"]), true);
-  assert.equal(isInWorkspaceFolders(relative, ["/work/other"]), false);
-
-  // The folder must end at a path boundary, as with command-line matches.
-  const sibling = proc({ command: "node", args: "server.js", cwd: "/work/app-old" });
-  assert.equal(isInWorkspaceFolders(sibling, ["/work/app"]), false);
-
-  // A root folder should not match every working directory.
-  assert.equal(isInWorkspaceFolders(relative, ["/"]), false);
 });
 
 test("parseNetstatListeningPorts works with a translated state column", () => {

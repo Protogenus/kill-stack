@@ -18,6 +18,9 @@ const LISTENER_SOURCE = [
 (async () => {
   // Electron-based shells set this, which makes VS Code start as plain Node.
   delete process.env.ELECTRON_RUN_AS_NODE;
+  // Kill On Exit stops every server on the machine. This limits it to the
+  // servers these tests start, so a local run never kills your own servers.
+  process.env.KILLSTACK_TEST_ONLY_MATCH = "killstack-";
 
   const extensionDevelopmentPath = path.resolve(__dirname, "..");
   const extensionTestsPath = path.resolve(__dirname, "suite", "index.js");

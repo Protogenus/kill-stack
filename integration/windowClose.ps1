@@ -1,6 +1,6 @@
-# Opens a real VS Code window with Kill Stack loaded, starts one server inside
-# the open folder and one outside, closes the window the way clicking X does,
-# and checks which servers survived. Exits 1 if the result is wrong.
+# Opens a real VS Code window with Kill Stack loaded, starts a server in the
+# open folder, one elsewhere, and one on the ignore list, closes the window the
+# way clicking X does, and checks which servers survived. Exits 1 if wrong.
 param(
   [Parameter(Mandatory = $true)][string]$Code,
   [Parameter(Mandatory = $true)][string]$Repo,
@@ -10,17 +10,22 @@ param(
 
 $ErrorActionPreference = "Stop"
 Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
+# Kill On Exit stops every server on the machine. This limits it to the servers
+# this script starts, so a local run never kills your own servers.
+$env:KILLSTACK_TEST_ONLY_MATCH = "ks-windowclose-"
 
 $base = Join-Path $env:TEMP ("ks-windowclose-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
 $ws = Join-Path $base "ws"
-$outside = Join-Path $base "outside"
+$elsewhere = Join-Path $base "elsewhere"
+$kept = Join-Path $base "kept-server"
 $userData = Join-Path $base "user-data"
-New-Item -ItemType Directory -Force $ws, $outside, (Join-Path $userData "User") | Out-Null
+New-Item -ItemType Directory -Force $ws, $elsewhere, $kept, (Join-Path $userData "User") | Out-Null
 
-Set-Content (Join-Path $ws "server.js") "setInterval(() => {}, 1000);"
-Set-Content (Join-Path $outside "server.js") "setInterval(() => {}, 1000);"
+foreach ($dir in $ws, $elsewhere, $kept) {
+  Set-Content (Join-Path $dir "server.js") "setInterval(() => {}, 1000);"
+}
 $enabled = if ($KillOnExit -eq "on") { "true" } else { "false" }
-Set-Content (Join-Path $userData "User\settings.json") "{ `"killStack.killOnExit`": $enabled, `"security.workspace.trust.enabled`": false }"
+Set-Content (Join-Path $userData "User\settings.json") "{ `"killStack.killOnExit`": $enabled, `"killStack.ignorePatterns`": [`"kept-server`"], `"security.workspace.trust.enabled`": false }"
 
 function Get-CodeProcesses {
   Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq $Code }
@@ -30,9 +35,14 @@ function Test-Alive([int]$ProcessId) {
   [bool](Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)
 }
 
+function Start-Server([string]$Dir, [int]$Port) {
+  Start-Process node -ArgumentList "`"$Dir\server.js`"", "--port", "$Port" -PassThru -WindowStyle Hidden
+}
+
 # Started from this script, not from VS Code, so only Kill Stack can stop them.
-$insideServer = Start-Process node -ArgumentList "`"$ws\server.js`"", "--port", "9401" -PassThru -WindowStyle Hidden
-$outsideServer = Start-Process node -ArgumentList "`"$outside\server.js`"", "--port", "9402" -PassThru -WindowStyle Hidden
+$inFolder = Start-Server $ws 9401
+$elsewhereServer = Start-Server $elsewhere 9402
+$keptServer = Start-Server $kept 9403
 
 $failed = $false
 try {
@@ -71,17 +81,24 @@ try {
   }
   Start-Sleep -Seconds 3
 
-  $insideAlive = Test-Alive $insideServer.Id
-  $outsideAlive = Test-Alive $outsideServer.Id
-  Write-Host "kill on exit $KillOnExit -> inside alive: $insideAlive, outside alive: $outsideAlive"
+  $inFolderAlive = Test-Alive $inFolder.Id
+  $elsewhereAlive = Test-Alive $elsewhereServer.Id
+  $keptAlive = Test-Alive $keptServer.Id
+  Write-Host "kill on exit $KillOnExit -> in folder: $inFolderAlive, elsewhere: $elsewhereAlive, ignored: $keptAlive"
 
-  $expectInsideAlive = $KillOnExit -eq "off"
-  if ($insideAlive -ne $expectInsideAlive) {
-    Write-Host "FAIL: server in the open folder should be $(if ($expectInsideAlive) { 'running' } else { 'stopped' })"
+  # With Kill On Exit on, every server except the ignored one should stop.
+  $expectAlive = $KillOnExit -eq "off"
+  $state = if ($expectAlive) { "running" } else { "stopped" }
+  if ($inFolderAlive -ne $expectAlive) {
+    Write-Host "FAIL: server in the open folder should be $state"
     $failed = $true
   }
-  if (-not $outsideAlive) {
-    Write-Host "FAIL: server outside the open folder should keep running"
+  if ($elsewhereAlive -ne $expectAlive) {
+    Write-Host "FAIL: server outside the open folder should be $state"
+    $failed = $true
+  }
+  if (-not $keptAlive) {
+    Write-Host "FAIL: ignored server should keep running"
     $failed = $true
   }
 }
@@ -90,7 +107,7 @@ catch {
   $failed = $true
 }
 finally {
-  foreach ($server in $insideServer, $outsideServer) {
+  foreach ($server in $inFolder, $elsewhereServer, $keptServer) {
     Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
   }
   Get-CodeProcesses | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }

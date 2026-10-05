@@ -2,7 +2,6 @@
 // The OS calls (signals, taskkill, liveness checks) are passed in by the caller.
 import {
   collectDescendantPids,
-  isInWorkspaceFolders,
   matchesIgnorePattern,
   ServerProcess,
 } from "./processes";
@@ -30,11 +29,10 @@ export function posixTreeKillOrder(
   return [...collectDescendantPids(pid, children), pid];
 }
 
-// Servers that Kill On Exit would stop: the setting is on, the server is inside
-// an open folder, and it is not on the ignore list.
+// Servers that Kill On Exit would stop: every detected server, unless the
+// setting is off or the server is on the ignore list.
 export function selectExitTargets(
   processes: ServerProcess[],
-  folders: string[],
   ignorePatterns: string[],
   killOnExit: boolean,
 ): ServerProcess[] {
@@ -42,11 +40,7 @@ export function selectExitTargets(
     return [];
   }
 
-  return processes.filter(
-    (proc) =>
-      isInWorkspaceFolders(proc, folders) &&
-      !matchesIgnorePattern(proc, ignorePatterns),
-  );
+  return processes.filter((proc) => !matchesIgnorePattern(proc, ignorePatterns));
 }
 
 // PIDs with a listening socket on the port, in the order ports were reported.

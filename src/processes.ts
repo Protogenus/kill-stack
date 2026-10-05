@@ -313,35 +313,118 @@ export function collectDescendantPids(
   return descendants;
 }
 
-// True when the process was started in one of the folders (its working
-// directory is inside it) or its command line references one. Folder matches
-// end at a path boundary so "/work/app" does not match "/work/app-old".
-export function isInWorkspaceFolders(
-  proc: ServerProcess,
-  folders: string[],
-): boolean {
-  const haystack = normalizePathText(`${proc.command} ${proc.args}`);
-  const cwd = proc.cwd ? normalizePathText(proc.cwd) : "";
+// Folder names that say nothing about which project a script belongs to.
+const GENERIC_DIRS = new Set([
+  "src", "dist", "build", "out", "lib", "bin", "app", "server", "scripts",
+  "api", "backend", "frontend", "web", "client", ".bin", "cli",
+]);
 
-  return folders.some((folder) => {
-    const normalized = normalizePathText(folder).replace(/\/+$/, "");
-    if (!normalized) {
-      return false;
-    }
+const RUNNERS = new Set(["npm", "npx", "yarn", "pnpm", "bun"]);
 
-    if (cwd && (cwd === normalized || cwd.startsWith(`${normalized}/`))) {
-      return true;
-    }
-
-    // Keep the slash on drive roots like "c:/" so the match stays anchored.
-    const root = /^[a-z]:$/.test(normalized) ? `${normalized}/` : normalized;
-    const boundary = root.endsWith("/") ? "" : `(?=$|[\\s"'/])`;
-    return new RegExp(`${escapeRegExp(root)}${boundary}`).test(haystack);
-  });
+export interface ServerName {
+  // Short name, such as "shop · vite" or "api · server.js".
+  name: string;
+  // Project folder the server belongs to, when it can be worked out.
+  project?: string;
+  // Script, tool, or command that is running.
+  entry: string;
 }
 
-function normalizePathText(value: string): string {
-  return value.replace(/\\/g, "/").toLowerCase();
+// Works out a recognizable name from the command line. A bare "node" tells the
+// user nothing, so this looks for the script path, the package running from
+// node_modules, or the npm script, and the project folder around it.
+export function describeServer(proc: ServerProcess): ServerName {
+  const tokens = splitArgs(proc.args);
+  const executable = baseName(proc.command).replace(/\.exe$/i, "");
+  const scriptIndex = tokens.findIndex((token) => looksLikePath(token));
+  const script = scriptIndex >= 0 ? tokens[scriptIndex] : undefined;
+  let project = proc.cwd ? baseName(proc.cwd) : undefined;
+  let entry = executable;
+
+  if (script) {
+    const parts = script.replace(/\\/g, "/").split("/").filter(Boolean);
+    const modules = parts.lastIndexOf("node_modules");
+
+    if (modules >= 0 && parts[modules + 1]) {
+      // A tool installed in node_modules, such as vite or next.
+      const scoped = parts[modules + 1].startsWith("@");
+      const pkg = scoped
+        ? `${parts[modules + 1]}/${parts[modules + 2] ?? ""}`
+        : parts[modules + 1];
+      const projectIndex = projectFolderIndex(parts, modules);
+      project = projectIndex >= 0 ? parts[projectIndex] : project;
+
+      if (RUNNERS.has(pkg)) {
+        // npm, yarn, and friends: show the script they run, such as "npm run dev".
+        const rest = tokens.slice(scriptIndex + 1).filter((t) => !t.startsWith("-"));
+        entry = [pkg, ...rest.slice(0, 2)].join(" ");
+        // The runner lives in the Node install, not in the project.
+        project = proc.cwd ? baseName(proc.cwd) : undefined;
+      } else {
+        const command = tokens.slice(scriptIndex + 1).find((t) => /^[a-z][\w:-]*$/i.test(t));
+        entry = command && ["dev", "start", "serve", "preview"].includes(command)
+          ? `${pkg} ${command}`
+          : pkg;
+      }
+    } else {
+      const file = parts[parts.length - 1] ?? script;
+      const projectIndex = projectFolderIndex(parts, parts.length - 1);
+      if (projectIndex >= 0) {
+        project = parts[projectIndex];
+        const inner = parts.slice(projectIndex + 1);
+        entry = inner.length > 0 ? inner.join("/") : file;
+      } else {
+        entry = file;
+      }
+    }
+  } else if (tokens[0] === "-m" && tokens[1]) {
+    // python -m http.server, python -m uvicorn, and similar.
+    entry = tokens[1];
+  } else if (tokens[0] && !tokens[0].startsWith("-") && executable !== "node") {
+    // Tools like "ngrok http 8080" or "rails server".
+    entry = `${executable} ${tokens[0]}`;
+  }
+
+  const name = project && project.toLowerCase() !== entry.toLowerCase()
+    ? `${project} · ${entry}`
+    : entry;
+  return { name, project, entry };
+}
+
+// Index of the nearest folder above `before` that names a project, skipping
+// generic names like src or dist.
+function projectFolderIndex(parts: string[], before: number): number {
+  for (let i = before - 1; i >= 0; i--) {
+    const part = parts[i];
+    if (/^[a-z]:$/i.test(part) || part === "node_modules") {
+      continue;
+    }
+    if (!GENERIC_DIRS.has(part.toLowerCase())) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+function looksLikePath(token: string): boolean {
+  if (token.startsWith("-")) {
+    return false;
+  }
+  return /[\\/]/.test(token) || /\.(c|m)?[jt]sx?$|\.py$|\.rb$|\.php$/i.test(token);
+}
+
+function baseName(value: string): string {
+  const parts = value.replace(/\\/g, "/").split("/").filter(Boolean);
+  return parts[parts.length - 1] ?? value;
+}
+
+// Splits an argument string on spaces, keeping quoted segments together.
+function splitArgs(args: string): string[] {
+  const tokens: string[] = [];
+  for (const match of args.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)) {
+    tokens.push(match[1] ?? match[2] ?? match[3]);
+  }
+  return tokens;
 }
 
 export function formatCpu(cpu: string): string {

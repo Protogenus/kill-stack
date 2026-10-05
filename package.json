@@ -122,7 +122,7 @@
         "killStack.killOnExit": {
           "type": "boolean",
           "default": false,
-          "description": "Kill local server processes started from this window's folders when VS Code exits. On macOS, prompt first."
+          "description": "Kill all detected local server processes when VS Code exits, except those on the ignore list. On macOS, prompt first."
         },
         "killStack.ignorePatterns": {
           "type": "array",

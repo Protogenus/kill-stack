@@ -29,7 +29,8 @@ Quick Menu or the Command Palette.
 ### Dashboard
 
 The dashboard helps you review what is running before you take action. Each
-server is one row.
+server is one row, named after its project and script so you can tell servers
+apart, for example `shop · vite` or `api-gateway · server.js`.
 
 | Field | Description |
 | --- | --- |
@@ -38,7 +39,7 @@ server is one row.
 | **Elapsed** | How long the process has been running, when available |
 | **CPU** | CPU usage. On Windows it appears after the second refresh |
 | **Memory** | Current memory usage |
-| **Stops on exit** / **Ignored** | Stopped on exit, or on the ignore list |
+| **Ignored** | On the ignore list, so Kill All and Kill On Exit skip it |
 | **Command** | Expand a row to see the full executable and arguments |
 
 The **Kill all** button leaves ignored servers running.
@@ -71,15 +72,9 @@ Code itself, even when they hold a port.
 
 Kill Stack can clean up local server processes when VS Code closes.
 
-- Only servers that belong to this window's workspace folders are stopped.
-  Servers from other windows or terminals are left alone
-- A server belongs to a folder if its command line includes the folder path. On
-  macOS and Linux, a server started from inside the folder also counts, even if
-  its command line does not include the path. On Windows, only the command-line
-  check applies, so a server started with a relative path such as `node server.js`
-  may not be stopped
+- Every detected local server is stopped, including servers started from other
+  windows or terminals
 - Servers on the ignore list (see below) are never stopped
-- With no folder open, nothing is stopped
 - Child processes of a stopped server (for example, the real server started by
   `npm run dev`) are stopped too
 - On macOS, the extension prompts before killing processes. Choosing "Leave
@@ -142,9 +137,7 @@ From there you can:
 | Windows | `Get-CimInstance` | `taskkill /T /F`, with children |
 
 Ports come from `netstat -ano` on Windows, `ss` on Linux (with `lsof`
-as a fallback), and `lsof` on macOS. Working directories, which let Kill
-Stack match servers started from inside a folder, are read on macOS and
-Linux. Windows does not expose them, so only the command line is checked.
+as a fallback), and `lsof` on macOS.
 
 ## License
 

@@ -84,24 +84,16 @@
     const { refs } = row;
     const fullCommand = proc.args ? `${proc.command} ${proc.args}` : proc.command;
 
-    row.item.classList.toggle("is-exit", Boolean(proc.stopsOnExit));
     row.item.classList.toggle("is-ignored", Boolean(proc.ignored));
 
     refs.framework.textContent = proc.framework;
     refs.title.textContent = proc.label;
     refs.title.title = fullCommand;
 
-    if (proc.stopsOnExit) {
-      refs.pill.textContent = "Stops on exit";
-      refs.pill.className = "pill pill-exit";
-      refs.pill.hidden = false;
-    } else if (proc.ignored) {
-      refs.pill.textContent = "Ignored";
-      refs.pill.className = "pill pill-ignored";
-      refs.pill.hidden = false;
-    } else {
-      refs.pill.hidden = true;
-    }
+    // Every server stops on exit unless it is ignored, so only ignored ones are marked.
+    refs.pill.textContent = "Ignored";
+    refs.pill.className = "pill pill-ignored";
+    refs.pill.hidden = !proc.ignored;
 
     const meta = [];
     if (proc.ports && proc.ports.length) {
@@ -142,7 +134,7 @@
 
     killOnExitToggle.checked = Boolean(message.killOnExitEnabled);
     killOnExitHelp.textContent = killOnExitToggle.checked
-      ? "Stops servers started from open folders when VS Code closes."
+      ? "Stops all detected servers when VS Code closes, except ignored ones."
       : "Leaves servers running when VS Code closes.";
 
     killAllButton.disabled = killable === 0;
