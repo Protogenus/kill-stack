@@ -3,7 +3,8 @@ const assert = require("assert");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { spawn } = require("child_process");
+const net = require("net");
+const { execFileSync, spawn } = require("child_process");
 const vscode = require("vscode");
 
 const EXTENSION_ID = "RedRiverDesign.kill-stack";
@@ -44,6 +45,64 @@ async function setKillOnExit(enabled) {
   await vscode.workspace
     .getConfiguration("killStack")
     .update("killOnExit", enabled, vscode.ConfigurationTarget.Global);
+}
+
+// Reads listening ports from the OS with the same command the extension uses,
+// parsed by the same parsers, so this checks real command output.
+function readListeningPorts() {
+  const processes = require(path.join(repoRoot, "out", "processes.js"));
+  if (process.platform === "win32") {
+    return processes.parseNetstatListeningPorts(
+      execFileSync("netstat", ["-ano"], { encoding: "utf8" }),
+    );
+  }
+  if (process.platform === "linux") {
+    return processes.parseSsListeningPorts(
+      execFileSync("ss", ["-H", "-ltnp"], { encoding: "utf8" }),
+    );
+  }
+  try {
+    return processes.parseLsofListeningPorts(
+      execFileSync("lsof", ["-nP", "-iTCP", "-sTCP:LISTEN", "-F", "pn"], {
+        encoding: "utf8",
+      }),
+    );
+  } catch (err) {
+    return processes.parseLsofListeningPorts(err.stdout || "");
+  }
+}
+
+function canConnect(port) {
+  return new Promise((resolve) => {
+    const socket = net.connect({ port, host: "127.0.0.1" });
+    socket.once("connect", () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.once("error", () => resolve(false));
+  });
+}
+
+// Starts a real TCP listener and waits until it accepts connections.
+async function startListener(scriptPath, port) {
+  const child = spawn("node", [scriptPath, String(port)], {
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  await new Promise((resolve, reject) => {
+    child.once("spawn", resolve);
+    child.once("error", reject);
+  });
+
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    if (await canConnect(port)) {
+      return child;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  child.kill("SIGKILL");
+  throw new Error(`listener on port ${port} did not start`);
 }
 
 // What VS Code calls on shutdown. Loaded from the compiled output of this checkout.
@@ -112,6 +171,19 @@ suite("Kill Stack smoke tests", () => {
 
     assert.ok(await waitForExit(inside.pid), "server in the open folder should stop");
     assert.ok(isAlive(outside.pid), "server outside the open folder should keep running");
+  });
+
+  test("the OS port listing includes the port a real listener opens", async () => {
+    const folder = vscode.workspace.workspaceFolders[0].uri.fsPath;
+    const port = 9201;
+    const listener = await startListener(path.join(folder, "listener.js"), port);
+    children.push(listener);
+
+    const ports = readListeningPorts();
+    assert.ok(
+      (ports.get(listener.pid) || []).includes(port),
+      `expected port ${port} for PID ${listener.pid}, got ${JSON.stringify([...ports])}`,
+    );
   });
 
   test("does nothing on exit when kill on exit is off", async function () {

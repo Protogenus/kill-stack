@@ -6,6 +6,14 @@ const path = require("path");
 const { runTests } = require("@vscode/test-electron");
 
 const SERVER_SOURCE = "setInterval(() => {}, 1000);\n";
+// A real TCP listener, used to check that port detection reads OS output.
+const LISTENER_SOURCE = [
+  'const net = require("net");',
+  "const port = Number(process.argv[2]);",
+  'net.createServer().listen(port, "127.0.0.1");',
+  "setInterval(() => {}, 1000);",
+  "",
+].join("\n");
 
 (async () => {
   // Electron-based shells set this, which makes VS Code start as plain Node.
@@ -14,10 +22,11 @@ const SERVER_SOURCE = "setInterval(() => {}, 1000);\n";
   const extensionDevelopmentPath = path.resolve(__dirname, "..");
   const extensionTestsPath = path.resolve(__dirname, "suite", "index.js");
 
-  // The workspace folder holds a server script, so the test can start a server
+  // The workspace folder holds server scripts, so the test can start a server
   // "inside" the open folder.
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "killstack-ws-"));
   fs.writeFileSync(path.join(workspace, "server.js"), SERVER_SOURCE);
+  fs.writeFileSync(path.join(workspace, "listener.js"), LISTENER_SOURCE);
 
   await runTests({
     extensionDevelopmentPath,
