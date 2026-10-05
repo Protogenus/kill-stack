@@ -80,3 +80,13 @@ test("isInWorkspaceFolders matches a server started from a relative path via its
   // A root folder should not match every working directory.
   assert.equal(isInWorkspaceFolders(relative, ["/"]), false);
 });
+
+test("parseNetstatListeningPorts works with a translated state column", () => {
+  const { parseNetstatListeningPorts } = require("../out/processes.js");
+  const raw = [
+    "  TCP    0.0.0.0:3000           0.0.0.0:0              ABHÖREN         4321",
+    "  TCP    127.0.0.1:52000        127.0.0.1:3000         HERGESTELLT     4321",
+  ].join("\r\n");
+
+  assert.deepEqual([...parseNetstatListeningPorts(raw)], [[4321, [3000]]]);
+});
