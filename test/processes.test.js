@@ -206,3 +206,79 @@ test("format helpers keep platform-specific values readable", () => {
   assert.equal(formatMemory("125MB"), "125MB");
   assert.equal(formatMemory("?"), "?");
 });
+
+test("parseProcessTree and collectDescendantPids return children deepest first", () => {
+  const { parseProcessTree, collectDescendantPids } = require("../out/processes.js");
+  const tree = parseProcessTree(["  10 1", "  11 10", "  12 11", "  13 10", "  14 1"].join("\n"));
+
+  assert.deepEqual(collectDescendantPids(10, tree), [12, 11, 13]);
+  assert.deepEqual(collectDescendantPids(14, tree), []);
+});
+
+test("isInWorkspaceFolders matches folders on path boundaries only", () => {
+  const { isInWorkspaceFolders } = require("../out/processes.js");
+  const proc = (args, command = "node") => ({
+    pid: 1, command, args, cpu: "?", memory: "?", elapsed: "?", framework: "Node.js",
+  });
+
+  assert.equal(isInWorkspaceFolders(proc("C:\\work\\app\\server.js"), ["C:\\work\\app"]), true);
+  assert.equal(isInWorkspaceFolders(proc("/work/app/node_modules/.bin/vite"), ["/work/app/"]), true);
+  assert.equal(isInWorkspaceFolders(proc("/work/app-old/server.js"), ["/work/app"]), false);
+  assert.equal(isInWorkspaceFolders(proc("/other/server.js"), ["/work/app"]), false);
+  assert.equal(isInWorkspaceFolders(proc("server.js"), []), false);
+  assert.equal(isInWorkspaceFolders(proc("C:/work/app/x.js", "C:\\Program Files\\nodejs\\node.exe"), ["c:\\work\\app"]), true);
+});
+
+test("parseWindowsProcesses derives elapsed time from CreationDate", () => {
+  const { parseWindowsProcesses } = require("../out/processes.js");
+  const now = Date.parse("2026-10-05T12:00:00Z");
+  const raw = JSON.stringify({
+    ProcessId: 7,
+    Name: "node.exe",
+    CommandLine: "node server.js",
+    WorkingSetSize: 1048576,
+    CreationDate: "2026-10-05T11:55:30.0000000Z",
+  });
+
+  const [proc] = parseWindowsProcesses(raw, now);
+  assert.equal(proc.elapsed, "04:30");
+});
+
+test("formatElapsed matches ps etime style", () => {
+  const { formatElapsed } = require("../out/processes.js");
+  assert.equal(formatElapsed(59), "00:59");
+  assert.equal(formatElapsed(3723), "01:02:03");
+  assert.equal(formatElapsed(90061), "1-01:01:01");
+});
+
+test("parseNetstatListeningPorts reads IPv4 and IPv6 listeners", () => {
+  const { parseNetstatListeningPorts } = require("../out/processes.js");
+  const raw = [
+    "  Proto  Local Address          Foreign Address        State           PID",
+    "  TCP    0.0.0.0:3000           0.0.0.0:0              LISTENING       4321",
+    "  TCP    [::]:3000              [::]:0                 LISTENING       4321",
+    "  TCP    127.0.0.1:5432         0.0.0.0:0              LISTENING       999",
+    "  TCP    127.0.0.1:52000        127.0.0.1:3000         ESTABLISHED     4321",
+  ].join("\r\n");
+
+  assert.deepEqual([...parseNetstatListeningPorts(raw)], [[4321, [3000]], [999, [5432]]]);
+});
+
+test("parseLsofListeningPorts reads pid and port fields", () => {
+  const { parseLsofListeningPorts } = require("../out/processes.js");
+  const raw = ["p812", "n*:8080", "n127.0.0.1:9229", "p55", "n[::1]:5173"].join("\n");
+
+  assert.deepEqual([...parseLsofListeningPorts(raw)], [[812, [8080, 9229]], [55, [5173]]]);
+});
+
+test("matchesIgnorePattern matches command lines case-insensitively", () => {
+  const { matchesIgnorePattern } = require("../out/processes.js");
+  const proc = {
+    pid: 1, command: "/usr/bin/docker-proxy", args: "-host-port 5432", cpu: "?", memory: "?", elapsed: "?", framework: "Node.js",
+  };
+
+  assert.equal(matchesIgnorePattern(proc, ["DOCKER-PROXY"]), true);
+  assert.equal(matchesIgnorePattern(proc, ["5432"]), true);
+  assert.equal(matchesIgnorePattern(proc, ["  "]), false);
+  assert.equal(matchesIgnorePattern(proc, ["ngrok"]), false);
+});

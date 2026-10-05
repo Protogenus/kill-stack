@@ -42,21 +42,36 @@ Each process is shown in its own card so it is easier to distinguish similar loc
 | `Kill Stack: Open Dashboard` | Open the Kill Stack dashboard |
 | `Kill Stack: Kill All Local Servers` | Kill every detected local server process |
 | `Kill Stack: Refresh Dashboard` | Refresh the dashboard |
+| `Kill Stack: Quick Menu` | Pick a server from a list to kill it. The status bar item opens this menu |
+| `Kill Stack: Kill Process on Port…` | Enter a port number and kill whatever is listening on it |
+
+### Local Servers Sidebar
+
+The Kill Stack icon in the activity bar opens a **Local Servers** list. Each row shows the framework, ports, memory, and uptime. Use the stop button on a row (or the Kill Server action from the keyboard or context menu) to stop one server. Kill Stack asks for confirmation first.
+
+### Ports
+
+Each server shows the TCP ports it is listening on. Ports come from `netstat -ano` on Windows, `ss` on Linux (with `lsof` as a fallback), and `lsof` on macOS. Kill Stack never stops PIDs 0 through 4, its own extension host, or VS Code itself, even when they hold a port.
 
 ### Kill On Exit
 
 Kill Stack can clean up local server processes when VS Code closes.
 
-- On macOS, the extension prompts before killing processes
+- Only servers whose command line includes one of this window's workspace folder paths are stopped. Servers from other windows or terminals are left alone
+- With no folder open, nothing is stopped
+- Child processes of a stopped server (for example, the real server started by `npm run dev`) are stopped too
+- On macOS, the extension prompts before killing processes. Choosing "Leave Running" keeps them alive
 - On Windows and Linux, processes are killed on exit without a blocking prompt
-- You can toggle this setting from the dashboard. This feature is OFF by default
+- A server counts as belonging to a folder if its command line includes the folder path, or, on macOS and Linux, if it was started from inside the folder. On Windows only the command-line check applies, so a server started with a relative path like `node server.js` may not match
+- You can toggle this setting from the dashboard. It is saved as a user setting and applies to every project. This feature is OFF by default
 
 ## Settings
 
 | Setting | Default | Description |
 |---|---|---|
 | `killStack.killOnExit` | `false` | Kill local server processes when VS Code closes |
-| `killStack.autoRefreshInterval` | `5` | Auto-refresh interval in seconds. Use `0` to disable |
+| `killStack.ignorePatterns` | `[]` | Servers whose command line contains any of these strings (case-insensitive) are never stopped by Kill All or Kill On Exit. Stopping one server at a time still works |
+| `killStack.autoRefreshInterval` | `5` | Auto-refresh interval in seconds. Refreshes pause while VS Code is unfocused and slow to about every 30 seconds when the dashboard is closed. Use `0` to disable |
 
 ## Detection Scope
 

@@ -1,15 +1,36 @@
 import * as vscode from "vscode";
 import { execFile, execFileSync } from "child_process";
+import * as fs from "fs";
 import { promisify } from "util";
 import {
+  KillCounts,
+  isProtectedPid,
+  killPidsAsync,
+  killPidsSync,
+  pidsOnPort,
+  posixTreeKillOrder,
+  selectExitTargets,
+} from "./killing";
+import {
+  applyWindowsCpu,
+  CpuSample,
+  formatCpu,
   formatMemory,
-  NodeProcess,
+  isInWorkspaceFolders,
+  matchesIgnorePattern,
+  ServerProcess,
+  parseLsofListeningPorts,
+  parseLsofWorkingDirectories,
+  parseNetstatListeningPorts,
   parsePosixProcesses,
+  parseProcessTree,
+  parseSsListeningPorts,
   parseWindowsProcesses,
 } from "./processes";
 
 const execFileAsync = promisify(execFile);
 const KILL_STACK_GREEN = "#6CC24A";
+const HIDDEN_REFRESH_SECONDS = 30;
 
 type PanelMessage =
   | { type: "ready" }
@@ -18,22 +39,213 @@ type PanelMessage =
   | { type: "killAll" }
   | { type: "setKillOnExit"; enabled: boolean };
 
-async function getNodeProcesses(): Promise<NodeProcess[]> {
-  try {
-    if (process.platform === "win32") {
-      const result = await execFileAsync("powershell", [
-        "-NoProfile",
-        "-Command",
-        "Get-CimInstance Win32_Process | Select-Object ProcessId, Name, CommandLine, WorkingSetSize | ConvertTo-Json -Compress",
-      ]);
-      return parseWindowsProcesses(result.stdout);
-    }
+// Only the runtimes and tools the classifier recognizes. Filtering in WMI keeps
+// PowerShell from returning every process on the machine.
+const WINDOWS_SERVER_IMAGE_FILTER = [
+  "Name = 'node.exe'",
+  "Name = 'bun.exe'",
+  "Name = 'deno.exe'",
+  "Name = 'php.exe'",
+  "Name = 'ruby.exe'",
+  "Name = 'java.exe'",
+  "Name = 'go.exe'",
+  "Name = 'air.exe'",
+  "Name = 'gin.exe'",
+  "Name = 'ngrok.exe'",
+  "Name = 'cloudflared.exe'",
+  "Name = 'nodemon.exe'",
+  "Name = 'ts-node.exe'",
+  "Name = 'tsx.exe'",
+  "Name LIKE 'python%'",
+].join(" OR ");
 
-    const result = await execFileAsync("ps", [
-      "-axo",
-      "pid=,pcpu=,pmem=,etime=,command=",
+const WINDOWS_PROCESS_LIST_COMMAND = [
+  "powershell",
+  [
+    "-NoProfile",
+    "-Command",
+    `Get-CimInstance -ClassName Win32_Process -Filter "${WINDOWS_SERVER_IMAGE_FILTER}" | Select-Object ProcessId, Name, CommandLine, WorkingSetSize, KernelModeTime, UserModeTime, @{Name='CreationDate';Expression={if($_.CreationDate){$_.CreationDate.ToUniversalTime().ToString('o')}}} | ConvertTo-Json -Compress`,
+  ],
+] as const;
+
+const POSIX_PROCESS_LIST_COMMAND = [
+  "ps",
+  ["-axo", "pid=,pcpu=,pmem=,etime=,command="],
+] as const;
+
+function parseProcessList(stdout: string): ServerProcess[] {
+  return process.platform === "win32"
+    ? parseWindowsProcesses(stdout)
+    : parsePosixProcesses(stdout);
+}
+
+function getProcessListCommand() {
+  return process.platform === "win32"
+    ? WINDOWS_PROCESS_LIST_COMMAND
+    : POSIX_PROCESS_LIST_COMMAND;
+}
+
+// Windows reports cumulative CPU time, so the previous sample is kept to compute a percentage.
+let windowsCpuSamples = new Map<string, CpuSample>();
+
+async function listRunningProcesses(): Promise<ServerProcess[]> {
+  try {
+    const [file, args] = getProcessListCommand();
+    const result = await execFileAsync(file, [...args]);
+    const processes = parseProcessList(result.stdout);
+
+    if (process.platform === "win32") {
+      windowsCpuSamples = applyWindowsCpu(
+        processes,
+        windowsCpuSamples,
+        Date.now(),
+      );
+    }
+    return processes;
+  } catch {
+    return [];
+  }
+}
+
+// PID -> listening TCP ports for every process on the machine, not just servers.
+async function getListeningPorts(): Promise<Map<number, number[]>> {
+  if (process.platform === "win32") {
+    try {
+      // Plain netstat (not -p TCP) so IPv6 listeners like [::]:3000 are included.
+      const { stdout } = await execFileAsync("netstat", ["-ano"]);
+      return parseNetstatListeningPorts(stdout);
+    } catch {
+      return new Map();
+    }
+  }
+
+  if (process.platform === "linux") {
+    try {
+      // ss ships with iproute2 on nearly every Linux system. lsof is the fallback.
+      const { stdout } = await execFileAsync("ss", ["-H", "-ltnp"]);
+      return parseSsListeningPorts(stdout);
+    } catch {
+      // Fall through to lsof.
+    }
+  }
+
+  try {
+    const { stdout } = await execFileAsync("lsof", [
+      "-nP",
+      "-iTCP",
+      "-sTCP:LISTEN",
+      "-F",
+      "pn",
     ]);
-    return parsePosixProcesses(result.stdout);
+    return parseLsofListeningPorts(stdout);
+  } catch (err) {
+    // lsof exits non-zero when it cannot read some processes but still prints the rest.
+    return parseLsofListeningPorts((err as { stdout?: string }).stdout ?? "");
+  }
+}
+
+// Working directory of each process, used to match servers started with a
+// relative path. Windows does not expose this without reading process memory.
+async function attachWorkingDirectories(
+  processes: ServerProcess[],
+): Promise<void> {
+  if (processes.length === 0 || process.platform === "win32") {
+    return;
+  }
+
+  if (process.platform === "linux") {
+    await Promise.all(
+      processes.map(async (proc) => {
+        try {
+          proc.cwd = await fs.promises.readlink(`/proc/${proc.pid}/cwd`);
+        } catch {
+          // The process exited or belongs to another user.
+        }
+      }),
+    );
+    return;
+  }
+
+  try {
+    const { stdout } = await execFileAsync("lsof", [
+      "-a",
+      "-d",
+      "cwd",
+      "-Fpn",
+      "-p",
+      processes.map((proc) => proc.pid).join(","),
+    ]);
+    applyWorkingDirectories(processes, parseLsofWorkingDirectories(stdout));
+  } catch (err) {
+    applyWorkingDirectories(
+      processes,
+      parseLsofWorkingDirectories((err as { stdout?: string }).stdout ?? ""),
+    );
+  }
+}
+
+function attachWorkingDirectoriesSync(processes: ServerProcess[]): void {
+  if (processes.length === 0 || process.platform === "win32") {
+    return;
+  }
+
+  if (process.platform === "linux") {
+    for (const proc of processes) {
+      try {
+        proc.cwd = fs.readlinkSync(`/proc/${proc.pid}/cwd`);
+      } catch {
+        // The process exited or belongs to another user.
+      }
+    }
+    return;
+  }
+
+  try {
+    const stdout = execFileSync(
+      "lsof",
+      ["-a", "-d", "cwd", "-Fpn", "-p", processes.map((proc) => proc.pid).join(",")],
+      { encoding: "utf8" },
+    );
+    applyWorkingDirectories(processes, parseLsofWorkingDirectories(stdout));
+  } catch {
+    // Without working directories, matching falls back to the command line.
+  }
+}
+
+function applyWorkingDirectories(
+  processes: ServerProcess[],
+  directories: Map<number, string>,
+): void {
+  for (const proc of processes) {
+    const cwd = directories.get(proc.pid);
+    if (cwd) {
+      proc.cwd = cwd;
+    }
+  }
+}
+
+async function getServerProcesses(): Promise<ServerProcess[]> {
+  const [processes, ports] = await Promise.all([
+    listRunningProcesses(),
+    getListeningPorts(),
+  ]);
+  await attachWorkingDirectories(processes);
+
+  return processes.map((proc) => ({
+    ...proc,
+    ports: ports.get(proc.pid) ?? [],
+  }));
+}
+
+// Synchronous variant for deactivate(): VS Code does not wait for async work
+// started during shutdown, so the kill-on-exit path must finish before returning.
+function getServerProcessesSync(): ServerProcess[] {
+  try {
+    const [file, args] = getProcessListCommand();
+    const stdout = execFileSync(file, [...args], { encoding: "utf8" });
+    const processes = parseProcessList(stdout);
+    attachWorkingDirectoriesSync(processes);
+    return processes;
   } catch {
     return [];
   }
@@ -53,42 +265,101 @@ function confirmKillOnExit(processCount: number): boolean {
   } still running. Kill ${processCount !== 1 ? "them" : "it"} now?`;
 
   try {
-    execFileSync("osascript", [
+    // osascript exits 0 for both buttons, so the chosen button has to be checked.
+    const choice = execFileSync("osascript", [
       "-e",
       `display dialog "${processLabel}" buttons {"Leave Running", "Kill All"} default button "Kill All" with icon caution`,
       "-e",
       "button returned of result",
-    ]);
-    return true;
+    ]).toString().trim();
+    return choice === "Kill All";
   } catch {
+    // Escape or closing the dialog makes osascript exit non-zero.
     return false;
   }
 }
 
-async function killProcess(pid: number): Promise<void> {
+function getChildProcessMap(): Map<number, number[]> {
   if (process.platform === "win32") {
-    execFileSync("taskkill", ["/PID", String(pid), "/F"]);
-  } else {
-    execFileSync("kill", ["-9", String(pid)]);
+    // taskkill /T handles the tree on Windows, so no map is needed.
+    return new Map();
+  }
+
+  try {
+    const stdout = execFileSync("ps", ["-axo", "pid=,ppid="], {
+      encoding: "utf8",
+    });
+    return parseProcessTree(stdout);
+  } catch {
+    return new Map();
   }
 }
 
-async function killAllNodeProcesses(
-  processes: NodeProcess[],
-): Promise<{ killed: number; errors: number }> {
-  let killed = 0;
-  let errors = 0;
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    // EPERM means the process exists but belongs to someone else.
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
 
-  for (const proc of processes) {
+// Kills a server together with the child processes it started (for example,
+// the real server behind `npm run dev`). Throws only if the root kill fails.
+function killPosixTree(pid: number, children: Map<number, number[]>): void {
+  for (const target of posixTreeKillOrder(pid, children)) {
+    if (target === pid) {
+      process.kill(pid, "SIGKILL");
+      continue;
+    }
+
     try {
-      await killProcess(proc.pid);
-      killed++;
+      process.kill(target, "SIGKILL");
     } catch {
-      errors++;
+      // The child may have exited on its own; keep going.
     }
   }
+}
 
-  return { killed, errors };
+function killProcessTreeSync(pid: number): void {
+  if (process.platform === "win32") {
+    execFileSync("taskkill", ["/PID", String(pid), "/T", "/F"]);
+    return;
+  }
+
+  killPosixTree(pid, getChildProcessMap());
+}
+
+async function getChildProcessMapAsync(): Promise<Map<number, number[]>> {
+  if (process.platform === "win32") {
+    return new Map();
+  }
+
+  try {
+    const { stdout } = await execFileAsync("ps", ["-axo", "pid=,ppid="]);
+    return parseProcessTree(stdout);
+  } catch {
+    return new Map();
+  }
+}
+
+// Async version for the dashboard, so Kill All does not block the extension host.
+async function killProcessTree(pid: number): Promise<void> {
+  if (process.platform === "win32") {
+    await execFileAsync("taskkill", ["/PID", String(pid), "/T", "/F"]);
+    return;
+  }
+
+  killPosixTree(pid, await getChildProcessMapAsync());
+}
+
+function killPidsSyncWithOs(pids: number[]): void {
+  killPidsSync(pids, { isAlive, killTree: killProcessTreeSync });
+}
+
+function killPids(pids: number[]): Promise<KillCounts> {
+  return killPidsAsync(pids, { isAlive, killTree: killProcessTree });
 }
 
 function shortenCommand(cmd: string): string {
@@ -112,7 +383,7 @@ function createStatusBarButton(
     vscode.StatusBarAlignment.Left,
     100,
   );
-  item.command = "killStack.showProcesses";
+  item.command = "killStack.statusMenu";
   item.text = "$(circuit-board) Kill Stack";
   item.tooltip = "Open Kill Stack local server dashboard";
   item.color = KILL_STACK_GREEN;
@@ -125,27 +396,42 @@ function getKillStackConfig(): vscode.WorkspaceConfiguration {
   return vscode.workspace.getConfiguration("killStack");
 }
 
+function getIgnorePatterns(): string[] {
+  return getKillStackConfig().get<string[]>("ignorePatterns") ?? [];
+}
+
+function getWorkspaceFolderPaths(): string[] {
+  return vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? [];
+}
+
+function isIgnored(proc: ServerProcess): boolean {
+  return matchesIgnorePattern(proc, getIgnorePatterns());
+}
+
+// Kill on exit would stop this server: it is in an open folder and not ignored.
+function stopsOnExit(proc: ServerProcess): boolean {
+  return (
+    isInWorkspaceFolders(proc, getWorkspaceFolderPaths()) && !isIgnored(proc)
+  );
+}
+
 function getKillOnExitSetting(): boolean {
   return getKillStackConfig().get<boolean>("killOnExit") ?? false;
 }
 
-function getKillOnExitTarget(): vscode.ConfigurationTarget {
-  return vscode.workspace.workspaceFolders?.length
-    ? vscode.ConfigurationTarget.Workspace
-    : vscode.ConfigurationTarget.Global;
-}
-
+// Always user-level: the setting applies to every project, and kill on exit
+// already limits itself to the open folders.
 async function setKillOnExitSetting(enabled: boolean): Promise<void> {
   await getKillStackConfig().update(
     "killOnExit",
     enabled,
-    getKillOnExitTarget(),
+    vscode.ConfigurationTarget.Global,
   );
 }
 
 async function updateStatusBar(
   item: vscode.StatusBarItem,
-  processes: NodeProcess[],
+  processes: ServerProcess[],
 ): Promise<void> {
   const count = processes.length;
 
@@ -165,13 +451,13 @@ async function updateStatusBar(
 
 class KillStackPanel implements vscode.Disposable {
   private panel: vscode.WebviewPanel;
-  private processes: NodeProcess[] = [];
+  private processes: ServerProcess[] = [];
   private readonly disposables: vscode.Disposable[] = [];
   private isDisposed = false;
 
   constructor(
     extensionUri: vscode.Uri,
-    initialProcesses: NodeProcess[],
+    initialProcesses: ServerProcess[],
     private readonly onDisposePanel: () => void,
     private readonly onRefreshRequest: () => Promise<void>,
     private readonly onKillRequest: (pid: number) => Promise<void>,
@@ -218,14 +504,15 @@ class KillStackPanel implements vscode.Disposable {
     await this.onKillAllRequest();
   }
 
-  async update(processes: NodeProcess[]): Promise<void> {
+  async update(processes: ServerProcess[]): Promise<void> {
     if (this.isDisposed) {
       return;
     }
     this.processes = processes;
+    const killOnExitEnabled = getKillOnExitSetting();
     await this.panel.webview.postMessage({
       type: "processes",
-      killOnExitEnabled: getKillOnExitSetting(),
+      killOnExitEnabled,
       processes: processes.map((process) => ({
         pid: process.pid,
         label: shortenCommand(process.command),
@@ -233,7 +520,11 @@ class KillStackPanel implements vscode.Disposable {
         command: process.command,
         args: process.args,
         memory: formatMemory(process.memory),
+        cpu: formatCpu(process.cpu),
         elapsed: process.elapsed,
+        ports: process.ports ?? [],
+        ignored: isIgnored(process),
+        stopsOnExit: killOnExitEnabled && stopsOnExit(process),
       })),
     });
   }
@@ -261,10 +552,14 @@ class KillStackPanel implements vscode.Disposable {
   }
 
   private getHtml(extensionUri: vscode.Uri): string {
-    const nonce = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    const iconUri = this.panel.webview.asWebviewUri(
-      vscode.Uri.joinPath(extensionUri, "images", "icon.png"),
-    );
+    const { webview } = this.panel;
+    const assetUri = (...segments: string[]) =>
+      webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, ...segments));
+    const styleUri = assetUri("media", "dashboard.css");
+    const scriptUri = assetUri("media", "dashboard.js");
+    const iconUri = assetUri("images", "icon.png");
+    const version = vscode.extensions.getExtension("RedRiverDesign.kill-stack")
+      ?.packageJSON?.version as string | undefined;
 
     return `<!DOCTYPE html>
 <html lang="en">
@@ -272,646 +567,76 @@ class KillStackPanel implements vscode.Disposable {
     <meta charset="UTF-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; img-src ${
-        this.panel.webview.cspSource
-      } https: data:; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';"
+      content="default-src 'none'; img-src ${webview.cspSource}; style-src ${webview.cspSource}; script-src ${webview.cspSource};"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Kill Stack</title>
-    <style>
-      :root {
-        color-scheme: light dark;
-        --ss-red-500: #d94c4c;
-        --ss-red-700: #a92c2c;
-        --ss-blue-900: #0b5cab;
-        --ss-blue-800: #1b73c8;
-        --ss-blue-700: #3191e0;
-        --ss-blue-500: #5faeff;
-        --ss-blue-200: #cde6ff;
-        --ss-white-100: #f5fbff;
-        --ss-white-050: #eef7ff;
-        --ss-ink: #1b2a40;
-        --ss-ink-soft: #445b78;
-        --ss-shadow: rgba(10, 44, 86, 0.22);
-      }
-
-      * {
-        box-sizing: border-box;
-      }
-
-      body {
-        margin: 0;
-        padding: 18px;
-        font-family: var(--vscode-font-family);
-        color: var(--vscode-foreground);
-        background:
-          radial-gradient(circle at -10% 10%, rgba(205, 230, 255, 0.55) 0, rgba(205, 230, 255, 0.55) 18%, rgba(205, 230, 255, 0) 44%),
-          linear-gradient(145deg, var(--ss-blue-800) 0%, var(--ss-blue-900) 64%, #0f4f91 100%);
-      }
-
-      .shell {
-        max-width: 900px;
-        margin: 0 auto;
-        display: grid;
-        gap: 12px;
-      }
-
-      .hero {
-        display: grid;
-        grid-template-columns: minmax(88px, 104px) 1fr auto;
-        gap: 16px;
-        align-items: center;
-        padding: 18px 20px;
-        border: 1px solid rgba(255, 255, 255, 0.16);
-        border-radius: 0;
-        background:
-          linear-gradient(135deg, rgba(246, 255, 246, 0.12), rgba(255, 255, 255, 0.04)),
-          rgba(255, 255, 255, 0.04);
-        box-shadow: 0 18px 36px var(--ss-shadow);
-      }
-
-      .hero-mark {
-        width: 96px;
-        height: 96px;
-        padding: 8px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        border-radius: 0;
-        background:
-          linear-gradient(180deg, rgba(250, 253, 255, 0.92), rgba(232, 243, 255, 0.8));
-        box-shadow:
-          inset 0 0 0 1px rgba(95, 174, 255, 0.18),
-          0 12px 22px rgba(9, 45, 88, 0.16);
-      }
-
-      .hero img {
-        width: 100%;
-        height: 100%;
-        display: block;
-        object-fit: contain;
-        object-position: center;
-      }
-
-      .hero h1 {
-        margin: 0;
-        font-size: 30px;
-        line-height: 1.05;
-        color: rgba(255, 255, 255, 0.98);
-        letter-spacing: -0.02em;
-      }
-
-      .hero h1 .kill-word {
-        color: var(--ss-red-500);
-        font-weight: 900;
-        letter-spacing: -0.04em;
-      }
-
-      .hero p {
-        margin: 6px 0 0;
-        max-width: 44ch;
-        color: rgba(255, 255, 255, 0.86);
-      }
-
-      .actions {
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-        justify-content: flex-end;
-      }
-
-      .toggle-card {
-        display: grid;
-        gap: 6px;
-        min-width: 180px;
-        padding: 10px 12px;
-        border: 1px solid rgba(95, 174, 255, 0.22);
-        background: rgba(245, 250, 255, 0.92);
-      }
-
-      .toggle-top {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 10px;
-      }
-
-      .toggle-title {
-        font-size: 11px;
-        font-weight: 700;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        color: var(--ss-ink);
-      }
-
-      .toggle-help {
-        font-size: 11px;
-        color: rgba(68, 91, 120, 0.8);
-      }
-
-      .switch {
-        position: relative;
-        display: inline-flex;
-        align-items: center;
-        width: 48px;
-        height: 28px;
-        flex: 0 0 auto;
-      }
-
-      .switch input {
-        position: absolute;
-        inset: 0;
-        margin: 0;
-        opacity: 0;
-        cursor: pointer;
-        z-index: 1;
-      }
-
-      .slider {
-        position: absolute;
-        inset: 0;
-        border-radius: 999px;
-        background: linear-gradient(135deg, rgba(68, 91, 120, 0.2), rgba(68, 91, 120, 0.32));
-        border: 1px solid rgba(68, 91, 120, 0.22);
-        box-shadow:
-          inset 0 1px 1px rgba(255, 255, 255, 0.28),
-          inset 0 -1px 1px rgba(11, 92, 171, 0.08);
-        transition:
-          background 120ms ease,
-          border-color 120ms ease,
-          box-shadow 120ms ease;
-      }
-
-      .slider::after {
-        content: "";
-        position: absolute;
-        top: 3px;
-        left: 3px;
-        width: 20px;
-        height: 20px;
-        background: #ffffff;
-        border-radius: 50%;
-        border: 1px solid rgba(27, 42, 64, 0.08);
-        box-shadow:
-          0 1px 3px rgba(11, 32, 58, 0.24),
-          inset 0 1px 0 rgba(255, 255, 255, 0.8);
-        transition:
-          transform 120ms ease,
-          box-shadow 120ms ease;
-      }
-
-      .switch input:checked + .slider {
-        background: linear-gradient(135deg, var(--ss-red-500), var(--ss-red-700));
-        border-color: rgba(169, 44, 44, 0.5);
-      }
-
-      .switch input:checked + .slider::after {
-        transform: translateX(20px);
-      }
-
-      .switch input:focus-visible + .slider {
-        box-shadow:
-          0 0 0 2px rgba(255, 255, 255, 0.7),
-          0 0 0 4px rgba(95, 174, 255, 0.5),
-          inset 0 1px 1px rgba(255, 255, 255, 0.28),
-          inset 0 -1px 1px rgba(11, 92, 171, 0.08);
-      }
-
-      button {
-        border: 1px solid rgba(32, 50, 39, 0.12);
-        border-radius: 0;
-        padding: 9px 15px;
-        font: inherit;
-        font-weight: 700;
-        cursor: pointer;
-        transition:
-          transform 120ms ease,
-          opacity 120ms ease,
-          background 120ms ease,
-          box-shadow 120ms ease;
-      }
-
-      button:hover {
-        transform: translateY(-1px);
-        box-shadow: 0 12px 20px rgba(13, 71, 48, 0.18);
-      }
-
-      button:disabled {
-        opacity: 0.5;
-        cursor: default;
-        transform: none;
-      }
-
-      .primary {
-        background: var(--vscode-button-background);
-        color: var(--vscode-button-foreground);
-      }
-
-      .secondary {
-        background: linear-gradient(135deg, #dff0ff, #bfe1ff);
-        color: var(--ss-ink);
-        border-color: rgba(95, 174, 255, 0.36);
-      }
-
-      .danger {
-        background: linear-gradient(135deg, var(--ss-blue-500), #3f8fe2);
-        color: #0d1c30;
-        border-color: rgba(16, 32, 21, 0.08);
-      }
-
-      .danger-all {
-        background: linear-gradient(135deg, var(--ss-red-500), var(--ss-red-700));
-        color: #ffffff;
-        border-color: rgba(120, 20, 20, 0.22);
-      }
-
-      .stats {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
-        gap: 8px;
-      }
-
-      .stat {
-        padding: 9px 10px;
-        border-radius: 0;
-        border: 1px solid rgba(255, 255, 255, 0.14);
-        background: rgba(247, 251, 255, 0.9);
-        box-shadow: 0 8px 14px rgba(10, 44, 86, 0.08);
-      }
-
-      .stat-label {
-        font-size: 10px;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        color: rgba(27, 42, 64, 0.66);
-      }
-
-      .stat-value {
-        margin-top: 4px;
-        font-size: 17px;
-        font-weight: 700;
-        color: var(--ss-ink);
-      }
-
-      .surface {
-        border-radius: 0;
-        border: 1px solid rgba(255, 255, 255, 0.14);
-        background: rgba(226, 238, 250, 0.96);
-        overflow: hidden;
-        box-shadow: 0 16px 30px rgba(10, 44, 86, 0.11);
-      }
-
-      .surface-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 14px;
-        padding: 12px 14px;
-        border-bottom: 1px solid rgba(49, 145, 224, 0.16);
-        background: linear-gradient(90deg, rgba(205, 230, 255, 0.36), rgba(255, 255, 255, 0.7));
-      }
-
-      .surface-header h2 {
-        margin: 0;
-        font-size: 18px;
-        color: var(--ss-ink);
-      }
-
-      .surface-header p {
-        margin: 4px 0 0;
-        color: rgba(68, 91, 120, 0.8);
-      }
-
-      .last-updated {
-        font-size: 12px;
-        color: rgba(68, 91, 120, 0.78);
-      }
-
-      .empty {
-        padding: 30px 18px 36px;
-        text-align: center;
-        color: rgba(68, 91, 120, 0.82);
-      }
-
-      .grid {
-        display: grid;
-        gap: 6px;
-        padding: 8px;
-      }
-
-      .card {
-        display: grid;
-        gap: 6px;
-        padding: 9px;
-        border-radius: 0;
-        border: 1px solid rgba(27, 92, 171, 0.34);
-        background:
-          linear-gradient(180deg, rgba(220, 235, 250, 0.98), rgba(206, 225, 244, 0.96));
-      }
-
-      .card-top {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 8px;
-      }
-
-      .process-title {
-        display: grid;
-        gap: 3px;
-        min-width: 0;
-      }
-
-      .process-title strong {
-        font-size: 14px;
-        color: var(--ss-ink);
-      }
-
-      .badge-row {
-        display: flex;
-        gap: 6px;
-        flex-wrap: wrap;
-      }
-
-      .badge {
-        padding: 4px 7px;
-        border-radius: 0;
-        font-size: 10px;
-        color: var(--ss-ink-soft);
-        background: rgba(95, 174, 255, 0.18);
-      }
-
-      .metrics {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-        gap: 5px;
-      }
-
-      .metric {
-        padding: 6px 8px;
-        border-radius: 0;
-        background: rgba(198, 220, 243, 0.92);
-        border: 1px solid rgba(49, 145, 224, 0.24);
-        min-width: 0;
-      }
-
-      .metric-label {
-        font-size: 11px;
-        color: rgba(68, 91, 120, 0.72);
-      }
-
-      .metric-value {
-        margin-top: 2px;
-        font-weight: 600;
-        font-size: 12px;
-        color: var(--ss-ink);
-        overflow: hidden;
-        text-overflow: ellipsis;
-      }
-
-      .details {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-        gap: 5px;
-      }
-
-      .details.single {
-        grid-template-columns: 1fr;
-      }
-
-      .stack {
-        display: grid;
-        gap: 4px;
-        min-width: 0;
-      }
-
-      .stack label {
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        color: rgba(68, 91, 120, 0.74);
-        font-weight: 800;
-      }
-
-      pre {
-        margin: 0;
-        padding: 6px 8px;
-        border-radius: 0;
-        background: rgba(194, 216, 240, 0.94);
-        border: 1px solid rgba(27, 92, 171, 0.24);
-        overflow-x: auto;
-        white-space: pre-wrap;
-        word-break: break-word;
-        font-family: var(--vscode-editor-font-family);
-        font-size: 10px;
-        line-height: 1.3;
-        color: var(--ss-ink);
-        max-height: 72px;
-      }
-
-      @media (max-width: 760px) {
-        body {
-          padding: 14px;
-        }
-
-        .hero {
-          grid-template-columns: 1fr;
-        }
-
-        .hero-mark {
-          width: 84px;
-          height: 84px;
-        }
-
-        .actions {
-          justify-content: flex-start;
-        }
-
-        .card-top {
-          align-items: flex-start;
-          flex-direction: column;
-        }
-
-        .details {
-          grid-template-columns: 1fr;
-        }
-      }
-    </style>
+    <link rel="stylesheet" href="${styleUri}" />
   </head>
   <body>
-    <div class="shell">
-      <section class="hero">
-        <div class="hero-mark">
-          <img src="${iconUri}" alt="Kill Stack icon" />
-        </div>
-        <div>
-          <h1><span class="kill-word">Kill</span> Stack</h1>
-          <p>Inspect local dev servers before you stop anything. Built to make cleanup safer across runtimes and frameworks.</p>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <img src="${iconUri}" alt="" width="28" height="28" />
+          <div>
+            <h1><span class="kill">Kill</span><span class="stack">Stack</span><span class="version">${escapeHtml(version ?? "")}</span></h1>
+            <p>Local development servers</p>
+          </div>
         </div>
         <div class="actions">
-          <div class="toggle-card">
-            <div class="toggle-top">
-              <div class="toggle-title">Kill On Exit</div>
-              <label class="switch" aria-label="Toggle kill on exit">
-                <input type="checkbox" id="killOnExitToggle" />
-                <span class="slider"></span>
-              </label>
-            </div>
-            <div class="toggle-help" id="killOnExitLabel">Stops detected local servers when VS Code closes.</div>
-          </div>
-          <button class="secondary" id="refreshButton">Refresh</button>
-          <button class="danger-all" id="killAllButton">Kill All</button>
+          <button type="button" class="btn" id="refresh">Refresh</button>
+          <button type="button" class="btn btn-danger" id="killAll" disabled>Kill all</button>
+        </div>
+      </header>
+
+      <section class="summary" aria-label="Summary">
+        <div class="tile">
+          <div class="tile-label">Running</div>
+          <div class="tile-value is-accent" id="count">0</div>
+        </div>
+        <div class="tile">
+          <div class="tile-label">Ports in use</div>
+          <div class="tile-value" id="ports">0</div>
+        </div>
+        <div class="tile">
+          <div class="tile-label">Stop on exit</div>
+          <div class="tile-value" id="exitCount">0</div>
         </div>
       </section>
 
-      <section class="stats">
-        <article class="stat">
-          <div class="stat-label">Running Processes</div>
-          <div class="stat-value" id="countValue">0</div>
-        </article>
-        <article class="stat">
-          <div class="stat-label">Auto Refresh</div>
-          <div class="stat-value" id="refreshValue">Live</div>
-        </article>
-        <article class="stat">
-          <div class="stat-label">Kill Safety</div>
-          <div class="stat-value">Full Command View</div>
-        </article>
+      <section class="setting">
+        <div class="setting-text">
+          <strong id="settingTitle">Kill on exit</strong>
+          <span id="killOnExitHelp">Leaves servers running when VS Code closes.</span>
+        </div>
+        <label class="switch">
+          <input
+            type="checkbox"
+            id="killOnExit"
+            role="switch"
+            aria-labelledby="settingTitle"
+            aria-describedby="killOnExitHelp"
+          />
+          <span class="track"></span>
+        </label>
       </section>
 
-      <section class="surface">
-        <div class="surface-header">
-          <div>
-            <h2>Process Dashboard</h2>
-            <p>Each card shows the detected framework, executable path, full args, and runtime details for local servers people forget to close.</p>
-          </div>
-          <div class="last-updated" id="updatedLabel">Waiting for process data…</div>
+      <section aria-labelledby="listTitle">
+        <div class="section-head">
+          <h2 id="listTitle">Servers</h2>
+          <span class="updated" id="updated">Waiting for data…</span>
         </div>
-        <div id="content"></div>
+        <ul class="list" id="list" hidden></ul>
+        <div class="empty" id="empty">
+          <img class="empty-mark" src="${iconUri}" alt="" width="56" height="56" />
+          <h3>No local servers running</h3>
+          <p>When a dev server or tunnel starts, it appears here with its command, ports, and resource use.</p>
+        </div>
       </section>
+
+      <p class="sr-only" id="status" role="status"></p>
     </div>
-
-    <script nonce="${nonce}">
-      const vscode = acquireVsCodeApi();
-      const content = document.getElementById("content");
-      const countValue = document.getElementById("countValue");
-      const updatedLabel = document.getElementById("updatedLabel");
-      const refreshButton = document.getElementById("refreshButton");
-      const killAllButton = document.getElementById("killAllButton");
-      const killOnExitToggle = document.getElementById("killOnExitToggle");
-      const killOnExitLabel = document.getElementById("killOnExitLabel");
-
-      refreshButton.addEventListener("click", () => {
-        vscode.postMessage({ type: "refresh" });
-      });
-
-      killAllButton.addEventListener("click", () => {
-        vscode.postMessage({ type: "killAll" });
-      });
-
-      killOnExitToggle.addEventListener("change", () => {
-        vscode.postMessage({
-          type: "setKillOnExit",
-          enabled: killOnExitToggle.checked,
-        });
-      });
-
-      window.addEventListener("message", (event) => {
-        const message = event.data;
-        if (message.type !== "processes") {
-          return;
-        }
-
-        const processes = message.processes;
-        killOnExitToggle.checked = Boolean(message.killOnExitEnabled);
-        killOnExitLabel.textContent = killOnExitToggle.checked
-          ? "Stops detected local servers when VS Code closes."
-          : "Leaves local servers running when VS Code closes.";
-        countValue.textContent = String(processes.length);
-        updatedLabel.textContent = "Updated " + new Date().toLocaleTimeString();
-        killAllButton.disabled = processes.length === 0;
-
-        if (processes.length === 0) {
-          content.innerHTML = '<div class="empty"><h3>No local server processes running</h3><p>When a dev server, local tunnel, or one-off local host starts, it will appear here with its full command line and a dedicated kill action.</p></div>';
-          return;
-        }
-
-        const cards = processes.map((process) => {
-          const fullCommand = process.args
-            ? process.command + " " + process.args
-            : process.command;
-          const hasArgs = Boolean(process.args);
-          const elapsedBadge = process.elapsed && process.elapsed !== "?"
-            ? '<span class="badge">' + escapeHtml(process.elapsed) + ' elapsed</span>'
-            : '';
-          const detailClass = hasArgs ? "details" : "details single";
-          const argsBlock = hasArgs
-            ? \`
-              <div class="stack">
-                <label>Arguments</label>
-                <pre>\${escapeHtml(process.args)}</pre>
-              </div>
-            \`
-            : "";
-
-          return \`
-            <article class="card">
-              <div class="card-top">
-                <div class="process-title">
-                  <strong>\${escapeHtml(process.label)}</strong>
-                  <div class="badge-row">
-                    <span class="badge">\${escapeHtml(process.framework)}</span>
-                    <span class="badge">PID \${escapeHtml(String(process.pid))}</span>
-                    \${elapsedBadge}
-                  </div>
-                </div>
-                <button class="danger-all" data-kill="\${escapeHtml(String(process.pid))}">
-                  Kill PID \${escapeHtml(String(process.pid))}
-                </button>
-              </div>
-              <div class="metrics">
-                <div class="metric">
-                  <div class="metric-label">Memory</div>
-                  <div class="metric-value">\${escapeHtml(process.memory)}</div>
-                </div>
-                <div class="metric">
-                  <div class="metric-label">Executable</div>
-                  <div class="metric-value">\${escapeHtml(process.command)}</div>
-                </div>
-              </div>
-              <div class="\${detailClass}">
-                <div class="stack">
-                  <label>Full Command</label>
-                  <pre>\${escapeHtml(fullCommand)}</pre>
-                </div>
-                \${argsBlock}
-              </div>
-            </article>
-          \`;
-        }).join("");
-
-        content.innerHTML = '<div class="grid">' + cards + "</div>";
-        content.querySelectorAll("[data-kill]").forEach((button) => {
-          button.addEventListener("click", () => {
-            const pid = Number(button.getAttribute("data-kill"));
-            if (!Number.isNaN(pid)) {
-              vscode.postMessage({ type: "kill", pid });
-            }
-          });
-        });
-      });
-
-      function escapeHtml(value) {
-        return String(value)
-          .replace(/&/g, "&amp;")
-          .replace(/</g, "&lt;")
-          .replace(/>/g, "&gt;")
-          .replace(/"/g, "&quot;")
-          .replace(/'/g, "&#39;");
-      }
-
-      vscode.postMessage({ type: "ready" });
-    </script>
+    <script src="${scriptUri}"></script>
   </body>
 </html>`;
   }
@@ -929,20 +654,171 @@ class KillStackPanel implements vscode.Disposable {
   }
 }
 
+function formatPorts(proc: ServerProcess): string {
+  return proc.ports && proc.ports.length
+    ? proc.ports.map((port) => `:${port}`).join(", ")
+    : "";
+}
+
+// One server row in the sidebar. The PID is the tree id, so keyboard focus
+// survives the periodic redraws.
+class ServerItem extends vscode.TreeItem {
+  constructor(readonly proc: ServerProcess) {
+    super(shortenCommand(proc.command), vscode.TreeItemCollapsibleState.None);
+
+    const ports = formatPorts(proc);
+    const exitState = isIgnored(proc)
+      ? "ignored"
+      : getKillOnExitSetting() && stopsOnExit(proc)
+        ? "stops on exit"
+        : "";
+
+    this.id = String(proc.pid);
+    this.contextValue = "server";
+    this.iconPath = new vscode.ThemeIcon("server-process");
+    this.description = [
+      proc.framework,
+      ports,
+      proc.cpu !== "?" ? formatCpu(proc.cpu) : "",
+      proc.memory !== "?" ? proc.memory : "",
+      proc.elapsed !== "?" ? proc.elapsed : "",
+      exitState,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    this.tooltip = [proc.command, proc.args].filter(Boolean).join(" ");
+    this.accessibilityInformation = {
+      label: [
+        `${proc.framework} server ${shortenCommand(proc.command)}`,
+        `PID ${proc.pid}`,
+        ports,
+        exitState,
+      ]
+        .filter(Boolean)
+        .join(", "),
+    };
+  }
+}
+
+class ServerTreeProvider
+  implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Disposable
+{
+  private readonly changed = new vscode.EventEmitter<void>();
+  readonly onDidChangeTreeData = this.changed.event;
+  private items: vscode.TreeItem[] = [];
+  private signature = "";
+
+  setServers(servers: ServerProcess[]): void {
+    const items: vscode.TreeItem[] =
+      servers.length === 0
+        ? [emptyServerItem()]
+        : servers.map((proc) => new ServerItem(proc));
+
+    // Only redraw when something visible changed, so the tree is not rebuilt every poll.
+    const signature = items
+      .map((item) => `${item.id}|${String(item.label)}|${item.description}`)
+      .join("\n");
+    if (signature === this.signature) {
+      return;
+    }
+
+    this.signature = signature;
+    this.items = items;
+    this.changed.fire();
+  }
+
+  getTreeItem(element: vscode.TreeItem): vscode.TreeItem {
+    return element;
+  }
+
+  getChildren(): vscode.TreeItem[] {
+    return this.items;
+  }
+
+  dispose(): void {
+    this.changed.dispose();
+  }
+}
+
+function emptyServerItem(): vscode.TreeItem {
+  const item = new vscode.TreeItem("No local servers running");
+  item.id = "empty";
+  item.description = "Start a dev server to see it here";
+  return item;
+}
+
+interface ServerPick extends vscode.QuickPickItem {
+  pid?: number;
+  openDashboard?: boolean;
+}
+
 export async function activate(
   context: vscode.ExtensionContext,
 ): Promise<void> {
-  let processes: NodeProcess[] = [];
+  let processes: ServerProcess[] = [];
   let panel: KillStackPanel | undefined;
   const statusBarItem = createStatusBarButton(context);
 
-  const syncUi = async (): Promise<NodeProcess[]> => {
-    processes = await getNodeProcesses();
+  const serverTree = new ServerTreeProvider();
+  context.subscriptions.push(
+    serverTree,
+    vscode.window.registerTreeDataProvider("killStack.servers", serverTree),
+  );
+
+  // Overlapping refreshes share one listing, so slow PowerShell calls don't pile up.
+  let listing: Promise<ServerProcess[]> | undefined;
+  const listProcesses = (): Promise<ServerProcess[]> => {
+    if (!listing) {
+      listing = getServerProcesses().finally(() => {
+        listing = undefined;
+      });
+    }
+    return listing;
+  };
+
+  const syncUi = async (): Promise<ServerProcess[]> => {
+    processes = await listProcesses();
     await updateStatusBar(statusBarItem, processes);
+    serverTree.setServers(processes);
     if (panel) {
       await panel.update(processes);
     }
     return processes;
+  };
+
+  // Shared by the dashboard, sidebar, and status bar menu. Always confirms first.
+  const confirmAndKill = async (pid: number): Promise<void> => {
+    const target = processes.find((process) => process.pid === pid);
+    if (!target) {
+      vscode.window.showWarningMessage(
+        `Process PID ${pid} is no longer running.`,
+      );
+      await syncUi();
+      return;
+    }
+
+    const confirmed = await vscode.window.showWarningMessage(
+      `Kill "${shortenCommand(target.command)}" (PID ${pid})?`,
+      {
+        modal: true,
+        detail: target.args
+          ? `${target.command} ${target.args}`
+          : target.command,
+      },
+      "Kill",
+    );
+
+    if (confirmed === "Kill") {
+      try {
+        await killProcessTree(pid);
+        vscode.window.showInformationMessage(
+          `Killed local server process PID ${pid}`,
+        );
+      } catch (err) {
+        vscode.window.showErrorMessage(`Failed to kill PID ${pid}: ${err}`);
+      }
+      await syncUi();
+    }
   };
 
   const openPanel = async (): Promise<void> => {
@@ -962,37 +838,7 @@ export async function activate(
         await syncUi();
       },
       async (pid: number) => {
-        const target = processes.find((process) => process.pid === pid);
-        if (!target) {
-          vscode.window.showWarningMessage(
-            `Process PID ${pid} is no longer running.`,
-          );
-          await syncUi();
-          return;
-        }
-
-        const confirmed = await vscode.window.showWarningMessage(
-          `Kill "${shortenCommand(target.command)}" (PID ${pid})?`,
-          {
-            modal: true,
-            detail: target.args
-              ? `${target.command} ${target.args}`
-              : target.command,
-          },
-          "Kill",
-        );
-
-        if (confirmed === "Kill") {
-          try {
-            await killProcess(pid);
-            vscode.window.showInformationMessage(
-              `Killed local server process PID ${pid}`,
-            );
-          } catch (err) {
-            vscode.window.showErrorMessage(`Failed to kill PID ${pid}: ${err}`);
-          }
-          await syncUi();
-        }
+        await confirmAndKill(pid);
       },
       async () => {
         const current = await syncUi();
@@ -1003,27 +849,42 @@ export async function activate(
           return;
         }
 
-        const detail = current
+        // Ignored servers are never part of Kill All. Single kills still work.
+        const killable = current.filter((proc) => !isIgnored(proc));
+        const ignoredCount = current.length - killable.length;
+        if (killable.length === 0) {
+          vscode.window.showInformationMessage(
+            "All running servers are on your ignore list.",
+          );
+          return;
+        }
+
+        const detail = killable
           .slice(0, 5)
           .map((process) => `${process.pid}: ${process.command}`)
           .join("\n");
+        const moreLines =
+          killable.length > 5 ? `\n…and ${killable.length - 5} more` : "";
+        const ignoredLine =
+          ignoredCount > 0
+            ? `\n${ignoredCount} ignored server${ignoredCount !== 1 ? "s" : ""} will be left running.`
+            : "";
 
         const confirmed = await vscode.window.showWarningMessage(
-          `Kill all ${current.length} local server process${
-            current.length !== 1 ? "es" : ""
+          `Kill all ${killable.length} local server process${
+            killable.length !== 1 ? "es" : ""
           }?`,
           {
             modal: true,
-            detail:
-              current.length > 5
-                ? `${detail}\n…and ${current.length - 5} more`
-                : detail,
+            detail: detail + moreLines + ignoredLine,
           },
           "Kill All",
         );
 
         if (confirmed === "Kill All") {
-          const { killed, errors } = await killAllNodeProcesses(current);
+          const { killed, errors } = await killPids(
+            killable.map((proc) => proc.pid),
+          );
           vscode.window.showInformationMessage(
             `Killed ${killed} local server process${killed !== 1 ? "es" : ""}${
               errors > 0 ? ` (${errors} failed)` : ""
@@ -1042,11 +903,133 @@ export async function activate(
     await panel.update(processes);
   };
 
+  const showStatusMenu = async (): Promise<void> => {
+    await syncUi();
+
+    const picks: ServerPick[] = processes.map((proc) => ({
+      label: `$(server-process) ${shortenCommand(proc.command)}`,
+      description: [proc.framework, formatPorts(proc)]
+        .filter(Boolean)
+        .join(" · "),
+      detail: [proc.command, proc.args].filter(Boolean).join(" "),
+      pid: proc.pid,
+    }));
+    picks.push({
+      label: "$(dashboard) Open dashboard…",
+      openDashboard: true,
+      alwaysShow: true,
+    });
+
+    const picked = await vscode.window.showQuickPick(picks, {
+      title: "Kill Stack",
+      placeHolder:
+        processes.length > 0
+          ? "Select a local server to kill"
+          : "No local servers running",
+      matchOnDescription: true,
+      matchOnDetail: true,
+    });
+
+    if (!picked) {
+      return;
+    }
+    if (picked.openDashboard) {
+      await openPanel();
+    } else if (picked.pid !== undefined) {
+      await confirmAndKill(picked.pid);
+    }
+  };
+
+  const killPort = async (): Promise<void> => {
+    const input = await vscode.window.showInputBox({
+      title: "Kill Stack",
+      prompt: "Port to free",
+      placeHolder: "3000",
+      validateInput: (value) => {
+        const port = Number(value.trim());
+        return /^\d+$/.test(value.trim()) && port >= 1 && port <= 65535
+          ? undefined
+          : "Enter a port number from 1 to 65535.";
+      },
+    });
+    if (input === undefined) {
+      return;
+    }
+
+    const port = Number(input.trim());
+    const owners = pidsOnPort(await getListeningPorts(), port);
+
+    if (owners.length === 0) {
+      vscode.window.showInformationMessage(`Nothing is listening on port ${port}.`);
+      return;
+    }
+
+    const targets = owners.filter(
+      (pid) => !isProtectedPid(pid, process.pid, process.ppid),
+    );
+    if (targets.length === 0) {
+      vscode.window.showErrorMessage(
+        `Port ${port} is held by a protected process, so Kill Stack will not stop it.`,
+      );
+      return;
+    }
+
+    const describe = (pid: number): string => {
+      const known = processes.find((proc) => proc.pid === pid);
+      return known
+        ? `${shortenCommand(known.command)} (PID ${pid})`
+        : `PID ${pid}`;
+    };
+    const protectedCount = owners.length - targets.length;
+
+    const confirmed = await vscode.window.showWarningMessage(
+      `Kill ${targets.map(describe).join(", ")} listening on port ${port}?`,
+      {
+        modal: true,
+        detail:
+          protectedCount > 0
+            ? `${protectedCount} protected process${protectedCount !== 1 ? "es" : ""} on this port will be left running.`
+            : undefined,
+      },
+      "Kill",
+    );
+    if (confirmed !== "Kill") {
+      return;
+    }
+
+    const { killed, errors } = await killPids(targets);
+    vscode.window.showInformationMessage(
+      `Killed ${killed} process${killed !== 1 ? "es" : ""} on port ${port}${
+        errors > 0 ? ` (${errors} failed)` : ""
+      }.`,
+    );
+    await syncUi();
+  };
+
   context.subscriptions.push(
     vscode.commands.registerCommand("killStack.showProcesses", async () => {
       await syncUi();
       await openPanel();
     }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("killStack.statusMenu", showStatusMenu),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("killStack.killPort", killPort),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "killStack.killServer",
+      async (item?: ServerItem) => {
+        if (item instanceof ServerItem) {
+          await confirmAndKill(item.proc.pid);
+        }
+      },
+    ),
   );
 
   context.subscriptions.push(
@@ -1073,17 +1056,43 @@ export async function activate(
   const intervalSec: number = config.get("autoRefreshInterval") ?? 5;
 
   let refreshTimer: ReturnType<typeof setInterval> | undefined;
+  let windowFocused = vscode.window.state.focused;
+  let ticksSinceRefresh = 0;
 
+  // Polling pauses while VS Code is unfocused. With the dashboard closed, it
+  // refreshes about every 30 seconds so the status bar count stays current.
   const startAutoRefresh = (seconds: number) => {
     if (refreshTimer) clearInterval(refreshTimer);
     if (seconds > 0) {
+      const hiddenEveryTicks = Math.ceil(HIDDEN_REFRESH_SECONDS / seconds);
       refreshTimer = setInterval(async () => {
+        if (!windowFocused) {
+          return;
+        }
+
+        ticksSinceRefresh++;
+        const dashboardOpen = panel?.isVisible() ?? false;
+        if (!dashboardOpen && ticksSinceRefresh < hiddenEveryTicks) {
+          return;
+        }
+
+        ticksSinceRefresh = 0;
         await syncUi();
       }, seconds * 1000);
     }
   };
 
   startAutoRefresh(intervalSec);
+
+  context.subscriptions.push(
+    vscode.window.onDidChangeWindowState((state) => {
+      windowFocused = state.focused;
+      if (windowFocused) {
+        ticksSinceRefresh = 0;
+        void syncUi();
+      }
+    }),
+  );
 
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((event) => {
@@ -1094,33 +1103,44 @@ export async function activate(
             .get<number>("autoRefreshInterval") ?? 5;
         startAutoRefresh(nextInterval);
       }
+
+      // Ignore list and kill-on-exit change which rows are marked, so redraw.
+      if (
+        event.affectsConfiguration("killStack.ignorePatterns") ||
+        event.affectsConfiguration("killStack.killOnExit")
+      ) {
+        void syncUi();
+      }
     }),
   );
 
   await syncUi();
 
   context.subscriptions.push({
-    dispose: async () => {
+    dispose: () => {
       if (refreshTimer) clearInterval(refreshTimer);
-
-      const killOnExit = getKillOnExitSetting();
-
-      if (!killOnExit) {
-        return;
-      }
-
-      const running = await getNodeProcesses();
-      if (running.length === 0) {
-        return;
-      }
-
-      if (confirmKillOnExit(running.length)) {
-        await killAllNodeProcesses(running);
-      }
     },
   });
 }
 
 export function deactivate(): void {
-  // Cleanup is handled through context subscriptions.
+  if (!getKillOnExitSetting()) {
+    return;
+  }
+
+  // Only stop servers that belong to this window's folders and are not on the
+  // ignore list. With no folder open, nothing matches and nothing is killed.
+  const running = selectExitTargets(
+    getServerProcessesSync(),
+    getWorkspaceFolderPaths(),
+    getIgnorePatterns(),
+    true,
+  );
+  if (running.length === 0) {
+    return;
+  }
+
+  if (confirmKillOnExit(running.length)) {
+    killPidsSyncWithOs(running.map((proc) => proc.pid));
+  }
 }

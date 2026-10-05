@@ -7,3 +7,8 @@ tsconfig.json
 package-lock.json
 AGENTS.md
 **/*.map
+
+security/**
+.github/**
+integration/**
+.vscode-test/**

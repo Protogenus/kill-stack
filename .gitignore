@@ -3,3 +3,4 @@ out/
 .vscode/
 *.vsix
 AGENTS.md
+.vscode-test/
