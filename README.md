@@ -1,8 +1,11 @@
 # Kill Stack
 
-Kill Stack is a VS Code extension for finding and shutting down forgotten local dev servers without leaving your editor.
+Kill Stack is a VS Code extension for finding and shutting down forgotten local
+dev servers without leaving your editor.
 
-It gives you a live process count in the status bar, a dashboard for reviewing active local services, and one-click controls for cleaning them up when you are done.
+It gives you a live process count in the status bar, a dashboard for reviewing
+active local services, and one-click controls for cleaning them up when you are
+done.
 
 ## Why Use Kill Stack
 
@@ -15,67 +18,88 @@ It gives you a live process count in the status bar, a dashboard for reviewing a
 
 ### Status Bar Signal
 
-Kill Stack adds a live status bar button that shows whether local server processes are running. Click it to open the dashboard.
+Kill Stack adds a status bar item that shows how many local server processes are
+running, for example `Kill Stack (3)`. Click it to open the Quick Menu, which
+lists running servers so you can stop one. Open the full dashboard from the
+Quick Menu or the Command Palette.
 
-- `Grey`: no local server processes detected
-- `Green`: one or more local server processes detected
+- No count: no local server processes detected
+- Count shown: one or more local server processes detected
 
 ### Dashboard
 
-The dashboard helps you review what is running before you take action.
+The dashboard helps you review what is running before you take action. Each
+server is one row.
 
 | Field | Description |
-|---|---|
+| --- | --- |
 | **Framework** | Detected framework, runtime, or tunnel |
-| **PID** | Process ID |
-| **Memory** | Current memory usage |
+| **Ports** | TCP ports the server is listening on |
 | **Elapsed** | How long the process has been running, when available |
-| **Executable** | Full executable path |
-| **Arguments** | Full command arguments |
+| **CPU** | CPU usage. On Windows it appears after the second refresh |
+| **Memory** | Current memory usage |
+| **Stops on exit** / **Ignored** | Stopped on exit, or on the ignore list |
+| **Command** | Expand a row to see the full executable and arguments |
 
-Each process is shown in its own card so it is easier to distinguish similar local servers.
+The **Kill all** button leaves ignored servers running.
 
 ### Commands
 
 | Command | Description |
-|---|---|
+| --- | --- |
 | `Kill Stack: Open Dashboard` | Open the Kill Stack dashboard |
-| `Kill Stack: Kill All Local Servers` | Kill every detected local server process |
+| `Kill Stack: Kill All Local Servers` | Kill all servers, except ignored ones |
 | `Kill Stack: Refresh Dashboard` | Refresh the dashboard |
-| `Kill Stack: Quick Menu` | Pick a server from a list to kill it. The status bar item opens this menu |
-| `Kill Stack: Kill Process on Port…` | Enter a port number and kill whatever is listening on it |
+| `Kill Stack: Quick Menu` | Pick a server to stop from a list |
+| `Kill Stack: Kill Process on Port…` | Kill whatever is listening on a port |
 
 ### Local Servers Sidebar
 
-The Kill Stack icon in the activity bar opens a **Local Servers** list. Each row shows the framework, ports, memory, and uptime. Use the stop button on a row (or the Kill Server action from the keyboard or context menu) to stop one server. Kill Stack asks for confirmation first.
+The Kill Stack icon in the activity bar opens a **Local Servers** list. Each row
+shows the framework, ports, CPU, memory, and uptime. Use the stop button on a
+row (or the Kill Server action from the keyboard or context menu) to stop one
+server. Kill Stack asks for confirmation first.
 
 ### Ports
 
-Each server shows the TCP ports it is listening on. Ports come from `netstat -ano` on Windows, `ss` on Linux (with `lsof` as a fallback), and `lsof` on macOS. Kill Stack never stops PIDs 0 through 4, its own extension host, or VS Code itself, even when they hold a port.
+Each server shows the TCP ports it is listening on. Ports come from `netstat
+-ano` on Windows, `ss` on Linux (with `lsof` as a fallback), and `lsof` on
+macOS. Kill Stack never stops PIDs 0 through 4, its own extension host, or VS
+Code itself, even when they hold a port.
 
 ### Kill On Exit
 
 Kill Stack can clean up local server processes when VS Code closes.
 
-- Only servers whose command line includes one of this window's workspace folder paths are stopped. Servers from other windows or terminals are left alone
+- Only servers that belong to this window's workspace folders are stopped.
+  Servers from other windows or terminals are left alone
+- A server belongs to a folder if its command line includes the folder path. On
+  macOS and Linux, a server started from inside the folder also counts, even if
+  its command line does not include the path. On Windows, only the command-line
+  check applies, so a server started with a relative path such as `node server.js`
+  may not be stopped
+- Servers on the ignore list (see below) are never stopped
 - With no folder open, nothing is stopped
-- Child processes of a stopped server (for example, the real server started by `npm run dev`) are stopped too
-- On macOS, the extension prompts before killing processes. Choosing "Leave Running" keeps them alive
+- Child processes of a stopped server (for example, the real server started by
+  `npm run dev`) are stopped too
+- On macOS, the extension prompts before killing processes. Choosing "Leave
+  Running" keeps them alive
 - On Windows and Linux, processes are killed on exit without a blocking prompt
-- A server counts as belonging to a folder if its command line includes the folder path, or, on macOS and Linux, if it was started from inside the folder. On Windows only the command-line check applies, so a server started with a relative path like `node server.js` may not match
-- You can toggle this setting from the dashboard. It is saved as a user setting and applies to every project. This feature is OFF by default
+- You can toggle this setting from the dashboard. It is saved as a user setting
+  and applies to every project. This feature is OFF by default
 
 ## Settings
 
 | Setting | Default | Description |
-|---|---|---|
-| `killStack.killOnExit` | `false` | Kill local server processes when VS Code closes |
-| `killStack.ignorePatterns` | `[]` | Servers whose command line contains any of these strings (case-insensitive) are never stopped by Kill All or Kill On Exit. Stopping one server at a time still works |
-| `killStack.autoRefreshInterval` | `5` | Auto-refresh interval in seconds. Refreshes pause while VS Code is unfocused and slow to about every 30 seconds when the dashboard is closed. Use `0` to disable |
+| --- | --- | --- |
+| `killStack.killOnExit` | `false` | Kill servers when VS Code closes |
+| `killStack.ignorePatterns` | `[]` | Servers to never stop automatically |
+| `killStack.autoRefreshInterval` | `5` | Refresh interval in seconds; `0` off |
 
 ## Detection Scope
 
-Kill Stack is built to detect common local development processes across multiple runtimes and tools, including:
+Kill Stack is built to detect common local development processes across multiple
+runtimes and tools, including:
 
 - Node-based dev servers
 - Python local servers
@@ -85,26 +109,42 @@ Kill Stack is built to detect common local development processes across multiple
 - `ngrok`
 - `cloudflared`
 
-It is designed for real-world local development workflows, not as a guarantee that every custom process pattern will be detected.
+A Node process is detected when its command line has a server hint, such as a
+framework name (`vite`, `next`, `express`), a word like `server`, `dev`,
+`start`, or `serve`, or a `--port` or `localhost` argument. `node server.js` is
+detected. `node app.js` with no other hints is not.
+
+It is designed for real-world local development workflows, not as a guarantee
+that every custom process pattern will be detected.
 
 ## Getting Started
 
-After installing Kill Stack, open the dashboard from the status bar or run `Kill Stack: Open Dashboard` from the Command Palette.
+After installing Kill Stack, click the status bar item or open the Local Servers
+sidebar from the activity bar. You can also run `Kill Stack: Open Dashboard`
+from the Command Palette.
 
 From there you can:
 
 - review active local server processes
-- kill individual processes
-- kill everything in one action
-- turn `Kill On Exit` on or off
+- stop an individual server from the Quick Menu, the sidebar, or the dashboard
+- kill everything in one action (the dashboard's Kill all button or `Kill Stack:
+  Kill All Local Servers`)
+- stop whatever is listening on a port with
+  `Kill Stack: Kill Process on Port…`
+- turn `Kill On Exit` on or off, and add patterns to `killStack.ignorePatterns`
 
 ## Platform Support
 
-| Platform | Detection | Kill Method |
-|---|---|---|
-| macOS | `ps -axo pid=,pcpu=,pmem=,etime=,command=` | `kill -9 <pid>` |
-| Linux | `ps -axo pid=,pcpu=,pmem=,etime=,command=` | `kill -9 <pid>` |
-| Windows | `Get-CimInstance Win32_Process` | `taskkill /PID /F` |
+| Platform | Detection | Kill method |
+| --- | --- | --- |
+| macOS | `ps` | `kill -9`, with children |
+| Linux | `ps` | `kill -9`, with children |
+| Windows | `Get-CimInstance` | `taskkill /T /F`, with children |
+
+Ports come from `netstat -ano` on Windows, `ss` on Linux (with `lsof`
+as a fallback), and `lsof` on macOS. Working directories, which let Kill
+Stack match servers started from inside a folder, are read on macOS and
+Linux. Windows does not expose them, so only the command line is checked.
 
 ## License
 
