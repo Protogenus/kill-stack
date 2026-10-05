@@ -190,12 +190,14 @@ export function parseLsofWorkingDirectories(raw: string): Map<number, string> {
   return directories;
 }
 
-// Parses `netstat -ano -p TCP` output into PID -> listening ports.
+// Parses `netstat -ano` output into PID -> listening ports. The state column is
+// translated on non-English Windows, so a listener is identified by its foreign
+// address having port 0 instead of by the word LISTENING.
 export function parseNetstatListeningPorts(raw: string): Map<number, number[]> {
   const ports = new Map<number, number[]>();
 
   for (const line of raw.split(/\r?\n/)) {
-    const match = line.match(/^\s*TCP\s+\S+:(\d+)\s+\S+\s+LISTENING\s+(\d+)\s*$/i);
+    const match = line.match(/^\s*TCP\s+\S+:(\d+)\s+\S+:0\s+\S+\s+(\d+)\s*$/);
     if (match) {
       addListeningPort(ports, Number(match[2]), Number(match[1]));
     }
