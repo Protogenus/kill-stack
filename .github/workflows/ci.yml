@@ -107,3 +107,7 @@ jobs:
       - name: Run smoke tests in VS Code (Windows)
         if: runner.os == 'Windows'
         run: npm run test:integration
+
+      - name: Close a real VS Code window with Kill On Exit (Windows)
+        if: runner.os == 'Windows'
+        run: npm run test:window-close
