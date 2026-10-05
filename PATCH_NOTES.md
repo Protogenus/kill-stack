@@ -1,5 +1,11 @@
 # Patch Notes
 
+## 1.1.1
+
+### Changed
+
+- Added a screenshot of the dashboard to the extension page.
+
 ## 1.1.0
 
 ### Added

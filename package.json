@@ -2,7 +2,7 @@
   "name": "kill-stack",
   "displayName": "Kill Stack",
   "description": "Stop local server processes from VS Code. Includes a kill-on-exit option. Works on Windows, macOS, and Linux. Detects many common local server frameworks, runtimes, and tunnels.",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "publisher": "RedRiverDesign",
   "license": "MIT",
   "repository": {

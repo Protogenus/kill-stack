@@ -7,6 +7,8 @@ It gives you a live process count in the status bar, a dashboard for reviewing
 active local services, and one-click controls for cleaning them up when you are
 done.
 
+![Kill Stack dashboard listing six local dev servers with their ports, CPU, and memory](images/killstack-big.png)
+
 ## Why Use Kill Stack
 
 - See which local servers are still running
